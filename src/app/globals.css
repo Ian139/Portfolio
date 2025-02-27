@@ -22,3 +22,17 @@ body {
   background: var(--background);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Add more opacity to dropdown menus */
+.dropdown-content {
+  background-color: rgba(255, 255, 255, 0.98) !important;
+  backdrop-filter: blur(8px);
+  z-index: 50; /* Ensure dropdowns appear above the frost effect */
+}
+
+/* If you're using a dark theme, you might want this instead: */
+.dark .dropdown-content {
+  background-color: rgba(0, 0, 0, 0.98) !important;
+  backdrop-filter: blur(8px);
+  z-index: 50;
+} 
