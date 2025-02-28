@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 interface PortfolioSection {
@@ -8,6 +8,8 @@ interface PortfolioSection {
   title: string;
   description: string;
   color: number;
+  link?: string; // Optional link for each section
+  content?: string; // Detailed content to show in panel
 }
 
 const portfolioSections: PortfolioSection[] = [
@@ -15,25 +17,72 @@ const portfolioSections: PortfolioSection[] = [
     position: -50,
     title: "Welcome!",
     description: "Press W to fly forward, S to reverse",
-    color: 0x4a9eff
+    color: 0x4a9eff,
+    content: `# Welcome to My Portfolio!
+
+Navigate through space using:
+- W/S: Move forward/backward
+- A/D: Roll left/right
+- Space: Boost
+- Enter: View section details
+
+Explore different sections to learn more about me and my work.`
   },
   {
     position: -150,
     title: "About Me",
     description: "Software Engineer & Creator",
-    color: 0xff4a4a
+    color: 0xff4a4a,
+    content: `# About Me
+
+I'm a passionate software engineer with a love for creating immersive digital experiences. My journey in technology has led me to work on various exciting projects, from web applications to 3D interactive experiences.
+
+## Skills Overview
+- Frontend Development
+- 3D Graphics & Animation
+- User Experience Design
+- Creative Problem Solving`
   },
   {
     position: -250,
     title: "Projects",
     description: "Check out my work",
-    color: 0x4aff4a
+    color: 0x4aff4a,
+    content: `# Featured Projects
+
+## Interactive Portfolio
+A 3D space-themed portfolio showcasing my work through an immersive experience.
+
+## Project 2
+Description of another significant project...
+
+## Project 3
+Details about a third project...
+
+Each project demonstrates my commitment to creating engaging user experiences.`
   },
   {
     position: -350,
     title: "Skills",
     description: "Technologies I work with",
-    color: 0xff4aff
+    color: 0xff4aff,
+    content: `# Technical Skills
+
+## Frontend
+- React/Next.js
+- Three.js/WebGL
+- TypeScript
+- CSS/Tailwind
+
+## Backend
+- Node.js
+- Python
+- Databases
+
+## Other
+- 3D Modeling
+- UI/UX Design
+- Version Control`
   }
 ];
 
@@ -42,11 +91,22 @@ const RocketScene = () => {
   const rocketRef = useRef<THREE.Group | undefined>(undefined);
   const speedRef = useRef(0);
   const rollRef = useRef(0);
-  const keysRef = useRef({ w: false, s: false, a: false, d: false, space: false });
+  const keysRef = useRef({ w: false, s: false, a: false, d: false, space: false, f: false });
   const sectionsRef = useRef<THREE.Group[]>([]);
+  const [activeSection, setActiveSection] = useState<PortfolioSection | null>(null);
+  const sunRef = useRef<THREE.Group | undefined>(undefined);
+  const cycleTimeRef = useRef(0);
+  const [mounted, setMounted] = useState(false);
+  const [showTablet, setShowTablet] = useState(false);
+  const [onPlatform, setOnPlatform] = useState(false);
+  const fJustPressedRef = useRef(false);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted || !containerRef.current) return;
 
     // Scene setup
     const scene = new THREE.Scene();
@@ -140,20 +200,64 @@ const RocketScene = () => {
     scene.add(stars);
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const ambientLight = new THREE.AmbientLight(0x555555, 0.5); // Darker ambient for night
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
-    scene.add(directionalLight);
+    // Create sun
+    const sunGroup = new THREE.Group();
+    const sunGeometry = new THREE.SphereGeometry(15, 32, 32);
+    const sunMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffdd44,
+      transparent: true,
+      opacity: 0.8
+    });
+    const sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+    sunGroup.add(sunMesh);
 
-    // Keyboard controls
+    // Add glow effect to sun
+    const sunGlowGeometry = new THREE.SphereGeometry(18, 32, 32);
+    const sunGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffdd44,
+      transparent: true,
+      opacity: 0.2
+    });
+    const sunGlow = new THREE.Mesh(sunGlowGeometry, sunGlowMaterial);
+    sunGroup.add(sunGlow);
+
+    // Position sun in the distance
+    sunGroup.position.set(0, 0, -200);
+    scene.add(sunGroup);
+    sunRef.current = sunGroup;
+
+    // Main directional light (sun light)
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+    sunLight.position.copy(sunGroup.position);
+    scene.add(sunLight);
+
+    // Update keyboard handler
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'w') keysRef.current.w = true;
       if (event.key === 's') keysRef.current.s = true;
       if (event.key === 'a') keysRef.current.a = true;
       if (event.key === 'd') keysRef.current.d = true;
-      if (event.key === ' ') keysRef.current.space = true;
+      if (event.key === ' ') {
+        event.preventDefault(); // Prevent space from triggering click
+        keysRef.current.space = true;
+      }
+      if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault(); // Prevent default
+        console.log('F key pressed in ThreeJS context');
+        if (!keysRef.current.f) {
+          fJustPressedRef.current = true;
+        }
+        keysRef.current.f = true;
+        
+        // Directly try to show tablet if on platform
+        if (onPlatform && activeSection) {
+          console.log('Attempting to show tablet from keydown');
+          setShowTablet(true);
+        }
+      }
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -162,6 +266,7 @@ const RocketScene = () => {
       if (event.key === 'a') keysRef.current.a = false;
       if (event.key === 'd') keysRef.current.d = false;
       if (event.key === ' ') keysRef.current.space = false;
+      if (event.key === 'f' || event.key === 'F') keysRef.current.f = false;
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -210,6 +315,39 @@ const RocketScene = () => {
 
     // Animation loop
     const animate = () => {
+      // Update sun position for day/night cycle (30 second cycle)
+      cycleTimeRef.current = (cycleTimeRef.current + 1) % (30 * 60); // 30 seconds at 60fps
+      const cycleProgress = cycleTimeRef.current / (30 * 60);
+      const sunAngle = cycleProgress * Math.PI * 2;
+
+      if (sunRef.current) {
+        // Orbit sun around the scene
+        const orbitRadius = 200;
+        sunRef.current.position.y = Math.sin(sunAngle) * orbitRadius;
+        sunRef.current.position.z = Math.cos(sunAngle) * orbitRadius;
+
+        // Update sun light position
+        const sunLight = scene.children.find(child => child instanceof THREE.DirectionalLight) as THREE.DirectionalLight;
+        if (sunLight) {
+          sunLight.position.copy(sunRef.current.position);
+          
+          // Adjust light intensity based on sun position
+          const intensity = Math.max(0.1, Math.sin(sunAngle));
+          sunLight.intensity = intensity;
+          
+          // Adjust ambient light for day/night cycle
+          const ambientLight = scene.children.find(child => child instanceof THREE.AmbientLight) as THREE.AmbientLight;
+          if (ambientLight) {
+            ambientLight.intensity = 0.2 + intensity * 0.3;
+          }
+
+          // Adjust scene background color for day/night cycle
+          const dayColor = new THREE.Color(0x4444ff);
+          const nightColor = new THREE.Color(0x000000);
+          scene.background = new THREE.Color().lerpColors(nightColor, dayColor, intensity * 0.7);
+        }
+      }
+
       // Handle boost
       const maxNormalSpeed = 0.5;
       const maxBoostSpeed = 1.5;
@@ -294,15 +432,37 @@ const RocketScene = () => {
         }
 
         // Animate portfolio sections
-        sectionsRef.current.forEach((section) => {
+        let closestSection: PortfolioSection | null = null;
+        let closestDistance = Infinity;
+        let isOnAnyPlatform = false;
+
+        sectionsRef.current.forEach((section, index) => {
           // Hover animation for the whole section (affects platform)
           section.userData.hoverOffset += section.userData.speed;
           section.position.y = section.userData.originalY + Math.sin(section.userData.hoverOffset) * 0.5;
           
           // Calculate distance to rocket and adjust text height
           const distance = Math.abs(section.position.z - rocketRef.current!.position.z);
+          const horizontalDistance = Math.sqrt(
+            Math.pow(section.position.x - rocketRef.current!.position.x, 2) +
+            Math.pow(section.position.y - rocketRef.current!.position.y, 2)
+          );
+          
+          // Check if rocket is on this platform (close in all dimensions)
+          const isOnPlatform = distance < 10 && horizontalDistance < 8 && Math.abs(speedRef.current) < 0.2;
+          
+          if (isOnPlatform) {
+            isOnAnyPlatform = true;
+          }
+          
           const textHeightLift = distance < 30 ? 6 : 0; // Lift text up when rocket is within 30 units
           section.userData.textTargetY = section.userData.originalTextY + textHeightLift;
+          
+          // Track closest section
+          if (distance < closestDistance && distance < 30) {
+            closestDistance = distance;
+            closestSection = portfolioSections[index];
+          }
           
           // Smooth height transition for text
           const text = section.children[1] as THREE.Mesh;
@@ -318,6 +478,12 @@ const RocketScene = () => {
           (platform.material as THREE.MeshPhongMaterial).opacity = opacity * 0.8;
           (text.material as THREE.MeshPhongMaterial).opacity = opacity;
         });
+
+        // Update platform status
+        setOnPlatform(isOnAnyPlatform);
+        
+        // Update active section
+        setActiveSection(closestSection);
       }
 
       renderer.render(scene, camera);
@@ -335,7 +501,7 @@ const RocketScene = () => {
 
     window.addEventListener('resize', handleResize);
 
-    // Cleanup
+    // Update cleanup
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
@@ -345,14 +511,102 @@ const RocketScene = () => {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [mounted]);
+
+  // Direct F key handling outside the ThreeJS context
+  useEffect(() => {
+    if (!mounted) return;
+    
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'f' || e.key === 'F') && onPlatform && activeSection) {
+        console.log('F KEY PRESSED GLOBALLY!');
+        setShowTablet(true);
+      }
+    };
+    
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, [mounted, onPlatform, activeSection]);
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
-    <div 
-      ref={containerRef} 
-      className="fixed inset-0"
-      style={{ background: 'black' }}
-    />
+    <div className="relative w-full h-full">
+      <div ref={containerRef} className="w-full h-full" />
+      
+      {/* Debug info and manual trigger */}
+      <div className="absolute top-0 left-0 p-2 bg-black bg-opacity-50 text-white text-xs">
+        <div>On platform: {onPlatform ? 'YES' : 'NO'}</div>
+        <div>Speed: {speedRef.current.toFixed(2)}</div>
+        <div>F key pressed: {keysRef.current.f ? 'YES' : 'NO'}</div>
+        <div>Active section: {activeSection?.title || 'None'}</div>
+        <button 
+          onClick={() => onPlatform && activeSection && setShowTablet(true)}
+          className="mt-2 px-2 py-1 bg-red-500 rounded text-white"
+        >
+          Manual Trigger
+        </button>
+      </div>
+      
+      {/* Tablet popup - make it more visible */}
+      {showTablet && activeSection && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4/5 max-w-2xl bg-slate-800 border-4 border-slate-600 rounded-lg p-6 text-white shadow-2xl z-50 animate-pulse">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-2xl font-bold" style={{ color: `#${activeSection.color.toString(16).padStart(6, '0')}` }}>
+              {activeSection.title}
+            </h2>
+            <button 
+              onClick={() => setShowTablet(false)}
+              className="bg-slate-700 hover:bg-slate-600 rounded-full p-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          
+          <div className="prose prose-invert max-h-[60vh] overflow-y-auto">
+            {activeSection.content ? (
+              <div dangerouslySetInnerHTML={{ __html: activeSection.content.replace(/\n/g, '<br>') }} />
+            ) : (
+              <p>{activeSection.description}</p>
+            )}
+          </div>
+          
+          {activeSection.link && (
+            <div className="mt-4">
+              <a 
+                href={activeSection.link} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="inline-block px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white"
+              >
+                Learn More
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Platform indicator - make it more noticeable */}
+      {onPlatform && !showTablet && (
+        <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-90 text-white px-6 py-3 rounded-full text-lg font-bold animate-bounce">
+          Press F to interact
+        </div>
+      )}
+      
+      {activeSection && !showTablet && (
+        <div className="absolute bottom-0 left-0 right-0 p-4 text-center text-white bg-black bg-opacity-50">
+          <h2 className="text-xl font-bold">{activeSection.title}</h2>
+          <p>{activeSection.description}</p>
+        </div>
+      )}
+    </div>
   );
 };
 
