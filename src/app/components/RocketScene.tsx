@@ -11,6 +11,7 @@ interface PortfolioSection {
   link?: string; // Optional link for each section
   content?: string; // Detailed content to show in panel
   xPosition?: number; // X position in space
+  visited?: boolean; // Track if section has been visited
 }
 
 const portfolioSections: PortfolioSection[] = [
@@ -109,38 +110,135 @@ const RocketScene = () => {
   const [onPlatform, setOnPlatform] = useState(false);
   const fJustPressedRef = useRef(false);
   const initialCameraPosition = useRef<{x: number, y: number, z: number} | null>(null);
+  const [rocketPosition, setRocketPosition] = useState({ x: 0, y: 0, z: 0 });
+  const [visitedSections, setVisitedSections] = useState<Set<string>>(new Set());
+  const [showFireworks, setShowFireworks] = useState(false);
+  const fireworksTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Function to reset rocket position
+  // Function to reset rocket position and regenerate platform positions
   const resetRocket = () => {
     if (rocketRef.current && initialCameraPosition.current) {
+      // Reset movement values
       speedRef.current = 0;
       lateralSpeedRef.current = 0;
       rollRef.current = 0;
       
-      // Reset camera position
+      // Reset camera position to initial starting point
       const camera = rocketRef.current.parent?.children.find(
         child => child instanceof THREE.PerspectiveCamera
       ) as THREE.PerspectiveCamera;
       
       if (camera) {
+        // Position the camera so that the rocket will be at 0,0,0
+        // Since rocket is positioned at camera.position.z - 20, camera.position.z should be 20
+        // And camera.position.x should be 0 to center the rocket horizontally
         camera.position.set(
-          initialCameraPosition.current.x, 
-          initialCameraPosition.current.y, 
-          initialCameraPosition.current.z
+          0, // Set camera X to 0 so rocket will be at X=0 
+          8, // Keep Y the same
+          20 // Set camera Z to 20 so rocket will be at Z=0
         );
         
-        // Reset rocket position relative to camera
-        rocketRef.current.position.x = 0;
-        rocketRef.current.position.z = camera.position.z - 20;
-        rocketRef.current.rotation.z = 0;
+        // The animation loop will position the rocket at (0, 0, 0) relative to the camera
+        // but let's set it explicitly now to ensure immediate update
+        rocketRef.current.position.set(0, 0, 0);
+        rocketRef.current.rotation.set(0, 0, 0);
         
         // Reset the rocket's rotation
         const rocket = rocketRef.current.children[0] as THREE.Group;
         if (rocket) {
-          rocket.rotation.x = -Math.PI / 2;
+          rocket.rotation.x = -Math.PI / 2; // Original forward-facing orientation
+          rocket.rotation.y = 0;
+          rocket.rotation.z = 0;
         }
+        
+        // Make camera look at the rocket
+        camera.lookAt(rocketRef.current.position);
+        
+        // Update position state immediately to reflect the reset
+        setRocketPosition({
+          x: 0,
+          y: 0,
+          z: 0
+        });
+      }
+      
+      // Regenerate random positions for platforms
+      portfolioSections.forEach((section, index) => {
+        // Generate new random X position between -80 and 80
+        section.xPosition = (Math.random() - 0.5) * 160;
+        
+        // Update platform positions in the scene
+        if (sectionsRef.current[index]) {
+          sectionsRef.current[index].position.x = section.xPosition;
+          
+          // Reset Y position animation
+          sectionsRef.current[index].userData.hoverOffset = 0;
+          sectionsRef.current[index].position.y = sectionsRef.current[index].userData.originalY;
+          
+          // Reset text position
+          const text = sectionsRef.current[index].children[1] as THREE.Mesh;
+          text.position.y = sectionsRef.current[index].userData.originalTextY;
+        }
+      });
+      
+      // Reset state
+      setActiveSection(null);
+      setOnPlatform(false);
+      setShowTablet(false);
+      
+      // Reset visited sections
+      setVisitedSections(new Set());
+      setShowFireworks(false);
+      
+      // Clear any pending fireworks timeout
+      if (fireworksTimeoutRef.current) {
+        clearTimeout(fireworksTimeoutRef.current);
+        fireworksTimeoutRef.current = null;
       }
     }
+  };
+
+  // Function to handle visiting a section
+  const handleSectionVisit = (sectionTitle: string) => {
+    if (!visitedSections.has(sectionTitle)) {
+      const newVisited = new Set(visitedSections);
+      newVisited.add(sectionTitle);
+      setVisitedSections(newVisited);
+      
+      // Check if all sections have been visited
+      if (newVisited.size === portfolioSections.length) {
+        setShowFireworks(true);
+        
+        // Clear previous timeout if exists
+        if (fireworksTimeoutRef.current) {
+          clearTimeout(fireworksTimeoutRef.current);
+        }
+        
+        // Hide fireworks after 8 seconds (extended for better effect)
+        fireworksTimeoutRef.current = setTimeout(() => {
+          setShowFireworks(false);
+        }, 8000);
+      }
+    }
+  };
+
+  // Function to get badge colors from visited sections
+  const getBadgeColors = () => {
+    const colors: string[] = [];
+    
+    // Convert section colors to hex strings
+    portfolioSections.forEach(section => {
+      if (visitedSections.has(section.title)) {
+        colors.push(`#${section.color.toString(16).padStart(6, '0')}`);
+      }
+    });
+    
+    // Add placeholder colors if not enough visited sections
+    while (colors.length < portfolioSections.length) {
+      colors.push('#444444');
+    }
+    
+    return colors;
   };
 
   useEffect(() => {
@@ -489,8 +587,17 @@ const RocketScene = () => {
         
         // Apply roll and slight turning to the rocket container
         rocketRef.current.rotation.z = -rollRef.current;
-        // Add yaw (turn) based on lateral movement - now inverted to face opposite direction
-        rocketRef.current.rotation.y = -lateralSpeedRef.current * 0.5;
+        
+        // Add yaw (turn) based on lateral movement
+        // When reversing (speed < 0), turn in the same direction as movement
+        // When moving forward (speed >= 0), turn in the opposite direction
+        if (speedRef.current < 0) {
+          // When reversing: face right for D, left for A (same as movement direction)
+          rocketRef.current.rotation.y = lateralSpeedRef.current * 0.5;
+        } else {
+          // When moving forward: face left for D, right for A (opposite to movement)
+          rocketRef.current.rotation.y = -lateralSpeedRef.current * 0.5;
+        }
         
         // Apply pitch based on speed to the rocket itself
         const targetRotation = -speedRef.current * 0.2;
@@ -624,6 +731,11 @@ const RocketScene = () => {
           
           if (isOnPlatform) {
             isOnAnyPlatform = true;
+            
+            // Remove the following line to avoid marking sections as visited just by landing on them
+            // if (activeSection && activeSection.title === portfolioSections[index].title) {
+            //   handleSectionVisit(activeSection.title);
+            // }
           }
           
           const textHeightLift = distance < 30 ? 6 : 0; // Lift text up when rocket is within 30 units
@@ -655,6 +767,13 @@ const RocketScene = () => {
         
         // Update active section
         setActiveSection(closestSection);
+
+        // Update rocket position state for display
+        setRocketPosition({
+          x: rocketRef.current.position.x,
+          y: rocketRef.current.position.y,
+          z: rocketRef.current.position.z
+        });
       }
 
       renderer.render(scene, camera);
@@ -692,6 +811,8 @@ const RocketScene = () => {
       if ((e.key === 'f' || e.key === 'F') && onPlatform && activeSection) {
         console.log('F KEY PRESSED GLOBALLY!');
         setShowTablet(true);
+        // Mark section as visited when tablet is opened
+        handleSectionVisit(activeSection.title);
       }
     };
     
@@ -702,6 +823,96 @@ const RocketScene = () => {
     };
   }, [mounted, onPlatform, activeSection]);
 
+  // Track when tablet is shown via manual button click
+  useEffect(() => {
+    if (showTablet && activeSection) {
+      // Mark section as visited when viewing content
+      handleSectionVisit(activeSection.title);
+    }
+  }, [showTablet, activeSection]);
+
+  // Enhanced fireworks component with multiple types of particles
+  const Fireworks = () => {
+    return (
+      <>
+        <div className="fullscreen-fireworks">
+          {/* Standard firework particles */}
+          {Array.from({ length: 50 }).map((_, i) => (
+            <div 
+              key={`particle-${i}`} 
+              className="firework"
+              style={{
+                '--x': `${Math.random() * 100}vw`,
+                '--y': `${Math.random() * 100}vh`,
+                '--size': `${Math.random() * 3 + 0.5}rem`,
+                '--color': `hsl(${Math.random() * 360}, 100%, 75%)`,
+                '--duration': `${Math.random() * 2 + 1}s`,
+                '--delay': `${Math.random() * 1.5}s`,
+              } as React.CSSProperties}
+            />
+          ))}
+          
+          {/* Starbursts - larger explosion effects */}
+          {Array.from({ length: 15 }).map((_, i) => (
+            <div 
+              key={`starburst-${i}`} 
+              className="starburst"
+              style={{
+                '--x': `${Math.random() * 100}vw`,
+                '--y': `${Math.random() * 100}vh`,
+                '--size': `${Math.random() * 8 + 2}rem`,
+                '--color': `hsl(${Math.random() * 360}, 100%, 70%)`,
+                '--duration': `${Math.random() * 2.5 + 1.5}s`,
+                '--delay': `${Math.random() * 3}s`,
+              } as React.CSSProperties}
+            />
+          ))}
+          
+          {/* Streamers - trailing effects */}
+          {Array.from({ length: 20 }).map((_, i) => (
+            <div 
+              key={`streamer-${i}`} 
+              className="streamer"
+              style={{
+                '--startX': `${Math.random() * 100}vw`,
+                '--startY': `${Math.random() * 30 + 70}vh`, // Start from bottom area
+                '--endX': `${Math.random() * 100}vw`,
+                '--endY': `${Math.random() * 50}vh`, // End higher up
+                '--width': `${Math.random() * 4 + 1}px`,
+                '--height': `${Math.random() * 100 + 50}px`,
+                '--color': `hsl(${Math.random() * 360}, 100%, 75%)`,
+                '--duration': `${Math.random() * 1 + 0.8}s`,
+                '--delay': `${Math.random() * 4}s`,
+              } as React.CSSProperties}
+            />
+          ))}
+          
+          {/* Glitter particles */}
+          {Array.from({ length: 100 }).map((_, i) => (
+            <div 
+              key={`glitter-${i}`} 
+              className="glitter"
+              style={{
+                '--x': `${Math.random() * 100}vw`,
+                '--y': `${Math.random() * 100}vh`,
+                '--size': `${Math.random() * 0.4 + 0.1}rem`,
+                '--color': `hsl(${Math.random() * 60 + 40}, 100%, 75%)`, // Gold-ish colors
+                '--duration': `${Math.random() * 3 + 2}s`,
+                '--delay': `${Math.random() * 2}s`,
+              } as React.CSSProperties}
+            />
+          ))}
+        </div>
+        
+        {/* Celebratory Banner */}
+        <div className="celebration-banner">
+          <div className="celebration-text">All Points Discovered!</div>
+          <div className="celebration-subtitle">Exploration Complete</div>
+        </div>
+      </>
+    );
+  };
+
   if (!mounted) {
     return null;
   }
@@ -709,6 +920,33 @@ const RocketScene = () => {
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
+      
+      {/* Fullscreen fireworks effect */}
+      {showFireworks && <Fireworks />}
+      
+      {/* Progress Counter */}
+      <div className="absolute top-4 right-4 flex items-center">
+        <div className={`progress-counter ${showFireworks ? 'completed' : ''}`}>
+          <div className="relative">
+            <div className="flex items-center justify-center">
+              <span className="text-2xl font-bold mr-2">{visitedSections.size}</span>
+              <span className="text-sm text-gray-300">/ {portfolioSections.length}</span>
+            </div>
+            <div className="progress-text mb-1">Points Visited</div>
+            
+            {/* Section badges */}
+            <div className="flex justify-center mt-1 space-x-1">
+              {getBadgeColors().map((color, index) => (
+                <div 
+                  key={index} 
+                  className={`section-badge ${visitedSections.size > index ? 'visited' : ''}`}
+                  style={{ backgroundColor: color }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
       
       {/* Debug info, manual trigger, and reset button */}
       <div className="absolute top-0 left-0 p-2 bg-black bg-opacity-50 text-white text-xs">
@@ -721,12 +959,26 @@ const RocketScene = () => {
             Reset Position
           </button>
         </div>
+        
+        {/* Position coordinates */}
+        <div className="mb-2 p-1 bg-gray-800 rounded">
+          <div className="font-bold mb-1">Rocket Position:</div>
+          <div>X: {rocketPosition.x.toFixed(2)}</div>
+          <div>Y: {rocketPosition.z.toFixed(2)}</div>
+          <div>Z: {rocketPosition.y.toFixed(2)}</div>
+        </div>
+        
         <div>On platform: {onPlatform ? 'YES' : 'NO'}</div>
         <div>Speed: {speedRef.current.toFixed(2)}</div>
         <div>F key pressed: {keysRef.current.f ? 'YES' : 'NO'}</div>
         <div>Active section: {activeSection?.title || 'None'}</div>
         <button 
-          onClick={() => onPlatform && activeSection && setShowTablet(true)}
+          onClick={() => {
+            if (onPlatform && activeSection) {
+              setShowTablet(true);
+              // No need to call handleSectionVisit here, as the useEffect will handle it
+            }
+          }}
           className="mt-2 px-2 py-1 bg-red-500 rounded text-white"
         >
           Manual Trigger
@@ -786,6 +1038,220 @@ const RocketScene = () => {
           <p>{activeSection.description}</p>
         </div>
       )}
+      
+      {/* Styles for counter and fireworks */}
+      <style jsx>{`
+        .progress-counter {
+          background: rgba(0, 0, 0, 0.6);
+          border-radius: 1rem;
+          padding: 0.75rem 1.25rem;
+          color: white;
+          box-shadow: 0 0 15px rgba(0, 100, 255, 0.3);
+          position: relative;
+          transition: all 0.3s ease;
+          z-index: 10;
+          min-width: 150px;
+          text-align: center;
+        }
+        
+        .progress-counter.completed {
+          background: rgba(20, 20, 40, 0.8);
+          box-shadow: 0 0 20px rgba(100, 200, 255, 0.6), 0 0 30px rgba(255, 215, 0, 0.4);
+          transform: scale(1.05);
+          animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+          0% { box-shadow: 0 0 20px rgba(100, 200, 255, 0.6), 0 0 30px rgba(255, 215, 0, 0.4); }
+          50% { box-shadow: 0 0 30px rgba(100, 200, 255, 0.8), 0 0 40px rgba(255, 215, 0, 0.6); }
+          100% { box-shadow: 0 0 20px rgba(100, 200, 255, 0.6), 0 0 30px rgba(255, 215, 0, 0.4); }
+        }
+        
+        .progress-text {
+          font-size: 0.7rem;
+          opacity: 0.7;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+        }
+        
+        .section-badge {
+          width: 0.7rem;
+          height: 0.7rem;
+          border-radius: 50%;
+          transition: all 0.3s ease;
+          position: relative;
+        }
+        
+        .section-badge.visited {
+          transform: scale(1.1);
+          box-shadow: 0 0 8px currentColor;
+          animation: badge-pulse 1.5s infinite;
+        }
+        
+        @keyframes badge-pulse {
+          0% { transform: scale(1.1); }
+          50% { transform: scale(1.2); }
+          100% { transform: scale(1.1); }
+        }
+        
+        .fullscreen-fireworks {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100vw;
+          height: 100vh;
+          pointer-events: none;
+          z-index: 20;
+          perspective: 1000px;
+        }
+        
+        .celebration-banner {
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: rgba(0, 0, 0, 0.7);
+          border: 2px solid gold;
+          border-radius: 1rem;
+          padding: 2rem 3rem;
+          text-align: center;
+          z-index: 30;
+          animation: banner-appear 1s ease-out forwards;
+          box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+        }
+        
+        .celebration-text {
+          font-size: 2.5rem;
+          font-weight: bold;
+          color: white;
+          text-shadow: 0 0 10px gold;
+          margin-bottom: 0.5rem;
+        }
+        
+        .celebration-subtitle {
+          font-size: 1.2rem;
+          color: gold;
+          opacity: 0.9;
+        }
+        
+        @keyframes banner-appear {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.8);
+          }
+          70% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.1);
+          }
+          100% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+          }
+        }
+        
+        .firework {
+          position: absolute;
+          width: var(--size);
+          height: var(--size);
+          background-color: var(--color);
+          border-radius: 50%;
+          box-shadow: 0 0 10px var(--color), 0 0 20px var(--color);
+          opacity: 0;
+          animation: firework var(--duration) ease-out var(--delay);
+        }
+        
+        @keyframes firework {
+          0% {
+            opacity: 1;
+            transform: translate(calc(var(--x) * 0.5), calc(var(--y) * 0.5)) scale(0);
+          }
+          50% {
+            opacity: 1;
+            transform: translate(var(--x), var(--y)) scale(1);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(var(--x), var(--y)) scale(0.2);
+            box-shadow: 0 0 40px var(--color), 0 0 60px var(--color);
+          }
+        }
+        
+        .starburst {
+          position: absolute;
+          width: var(--size);
+          height: var(--size);
+          background: radial-gradient(circle, var(--color) 0%, rgba(0,0,0,0) 70%);
+          border-radius: 50%;
+          opacity: 0;
+          filter: blur(3px);
+          animation: starburst var(--duration) ease-out var(--delay);
+        }
+        
+        @keyframes starburst {
+          0% {
+            opacity: 0;
+            transform: translate(var(--x), var(--y)) scale(0.1) rotate(0deg);
+          }
+          20% {
+            opacity: 1;
+            transform: translate(var(--x), var(--y)) scale(1) rotate(180deg);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(var(--x), var(--y)) scale(1.5) rotate(360deg);
+          }
+        }
+        
+        .streamer {
+          position: absolute;
+          left: var(--startX);
+          bottom: var(--startY);
+          width: var(--width);
+          height: var(--height);
+          background: linear-gradient(to top, var(--color), transparent);
+          transform-origin: bottom center;
+          opacity: 0;
+          filter: blur(1px);
+          animation: streamer var(--duration) ease-out var(--delay);
+        }
+        
+        @keyframes streamer {
+          0% {
+            opacity: 0.8;
+            transform: translateY(0) scaleY(0.1);
+          }
+          80% {
+            opacity: 1;
+            transform: translate(calc(var(--endX) - var(--startX)), calc(var(--endY) - var(--startY))) scaleY(1);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(calc(var(--endX) - var(--startX)), calc(var(--endY) - var(--startY))) scaleY(0.8);
+          }
+        }
+        
+        .glitter {
+          position: absolute;
+          width: var(--size);
+          height: var(--size);
+          background-color: var(--color);
+          border-radius: 50%;
+          opacity: 0;
+          animation: glitter var(--duration) ease-in-out var(--delay) infinite;
+        }
+        
+        @keyframes glitter {
+          0%, 100% {
+            opacity: 0;
+            transform: translate(var(--x), var(--y)) scale(0.1);
+          }
+          50% {
+            opacity: 1;
+            transform: translate(var(--x), var(--y)) scale(1);
+            box-shadow: 0 0 5px var(--color), 0 0 10px var(--color);
+          }
+        }
+      `}</style>
     </div>
   );
 };
