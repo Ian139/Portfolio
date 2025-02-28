@@ -138,17 +138,63 @@ const RocketScene = () => {
   const toggleCameraMode = () => {
     setCameraMode(prev => {
       const newMode = prev === 'third-person' ? 'first-person' : 'third-person';
+      console.log(`Switching camera mode to: ${newMode}`);
       
-      // Immediately adjust camera FOV based on mode
+      // Get camera reference
       if (rocketRef.current) {
         const camera = rocketRef.current.parent?.children.find(
           child => child instanceof THREE.PerspectiveCamera
         ) as THREE.PerspectiveCamera;
         
         if (camera) {
-          // Wider FOV for first-person to give better cockpit feel
+          // Adjust FOV based on mode
           camera.fov = newMode === 'first-person' ? 90 : 75;
           camera.updateProjectionMatrix();
+          
+          const rocket = rocketRef.current.children[0] as THREE.Group;
+          
+          // Force immediate transition to the new view mode
+          if (newMode === 'first-person') {
+            // Switch to first-person view
+            console.log("Switching to first-person view");
+            
+            // Make upper section transparent
+            if (rocket) {
+              const upperSection = rocket.children[0] as THREE.Mesh;
+              if (upperSection && upperSection.material) {
+                (upperSection.material as THREE.MeshPhongMaterial).opacity = 0.2;
+                (upperSection.material as THREE.MeshPhongMaterial).transparent = true;
+              }
+            }
+            
+            // Position camera immediately inside rocket
+            camera.position.copy(rocketRef.current.position);
+            camera.position.y += 1.5; // Cockpit height
+            
+            // Set camera rotation to look forward
+            camera.rotation.set(0, 0, 0); // Change from Math.PI to 0 to look forward
+            camera.rotation.order = 'YXZ'; // Set rotation order to avoid gimbal lock
+          } else {
+            // Switch to third-person view
+            console.log("Switching to third-person view");
+            
+            // Make rocket fully visible
+            if (rocket) {
+              const upperSection = rocket.children[0] as THREE.Mesh;
+              if (upperSection && upperSection.material) {
+                (upperSection.material as THREE.MeshPhongMaterial).opacity = 1.0;
+                (upperSection.material as THREE.MeshPhongMaterial).transparent = false;
+              }
+            }
+            
+            // Position camera behind rocket
+            camera.position.z = rocketRef.current.position.z + 20;
+            camera.position.x = rocketRef.current.position.x;
+            camera.position.y = 8;
+            
+            // Look at rocket
+            camera.lookAt(rocketRef.current.position);
+          }
         }
       }
       
@@ -187,18 +233,18 @@ const RocketScene = () => {
           camera.lookAt(rocketRef.current.position);
         } else {
           // First-person camera reset
-          // Position rocket at origin
+          // Position rocket at origin first
           rocketRef.current.position.set(0, 0, 0);
           
-          // Position camera in cockpit
-          camera.position.set(
-            0,
-            rocketRef.current.position.y + 1.5, // Higher up for cockpit view
-            0.5 // Slightly behind rocket front
-          );
+          // Position camera inside the rocket cockpit
+          camera.position.copy(rocketRef.current.position);
+          camera.position.y += 1.5; // Cockpit height
           
           // Look forward
-          camera.lookAt(new THREE.Vector3(0, camera.position.y, -100));
+          camera.rotation.set(0, 0, 0); // Set to look forward initially
+          
+          // Reset camera roll
+          camera.rotation.z = 0;
         }
         
         rocketRef.current.rotation.set(0, 0, 0);
@@ -477,7 +523,7 @@ const RocketScene = () => {
     reverseFireGlow.rotation.copy(reverseFire.rotation);
     reverseFireGlow.visible = false; // Initially hidden
     rocketEffects.add(reverseFireGlow);
-
+    
     // Create a container for the rocket that will handle the roll
     const rocketContainer = new THREE.Group();
     rocketContainer.add(rocket);
@@ -761,10 +807,25 @@ const RocketScene = () => {
 
       // Handle lateral movement with A and D - Fixed to be more intuitive
       const maxLateralSpeed = 0.3;
+      const boostLateralSpeed = 0.6; // New higher lateral speed when boosting
+      const currentMaxLateralSpeed = keysRef.current.space ? boostLateralSpeed : maxLateralSpeed; // Dynamic max speed
+      const isMovingBackward = speedRef.current < 0;
+      
       if (keysRef.current.a) {
-        lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01, -maxLateralSpeed);
+        // When moving backward in first-person mode, invert lateral controls
+        // to maintain directional consistency from the camera's perspective
+        if (isMovingBackward && cameraMode === 'first-person') {
+          lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01 * (keysRef.current.space ? 2 : 1), currentMaxLateralSpeed); // Faster when boosting
+        } else {
+          lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01 * (keysRef.current.space ? 2 : 1), -currentMaxLateralSpeed); // Faster when boosting
+        }
       } else if (keysRef.current.d) {
-        lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01, maxLateralSpeed);
+        // When moving backward in first-person mode, invert lateral controls
+        if (isMovingBackward && cameraMode === 'first-person') {
+          lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01 * (keysRef.current.space ? 2 : 1), -currentMaxLateralSpeed); // Faster when boosting
+        } else {
+          lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01 * (keysRef.current.space ? 2 : 1), currentMaxLateralSpeed); // Faster when boosting
+        }
       } else {
         lateralSpeedRef.current *= 0.95; // Gradually slow down
       }
@@ -782,16 +843,15 @@ const RocketScene = () => {
       }
 
       if (rocketRef.current) {
-        // Move camera and rocket in Z axis
-        camera.position.z -= speedRef.current;
-        
-        // Move camera and rocket in X axis
-        camera.position.x += lateralSpeedRef.current;
-        
-        // Handle camera mode positioning
+        // Different movement logic based on camera mode
         if (cameraMode === 'third-person') {
-          // Third-person view
-          rocketRef.current.position.z = camera.position.z - 20;
+          // THIRD PERSON MODE
+          // Move camera based on input
+        camera.position.z -= speedRef.current;
+          camera.position.x += lateralSpeedRef.current;
+          
+          // Position rocket relative to camera
+        rocketRef.current.position.z = camera.position.z - 20;
           rocketRef.current.position.x = camera.position.x;
           
           // Make rocket fully visible and restore opacity
@@ -810,51 +870,57 @@ const RocketScene = () => {
           // Set camera to look at the rocket
           camera.lookAt(rocketRef.current.position);
         } else {
-          // First-person view
+          // FIRST PERSON MODE
+          // Move the rocket directly based on input
+          rocketRef.current.position.z -= speedRef.current;
+          rocketRef.current.position.x += lateralSpeedRef.current;
           
-          // First update rocket position based on camera movement
-          rocketRef.current.position.z = camera.position.z - 0.5; // Slightly in front of camera
-          rocketRef.current.position.x = camera.position.x;
-          
-          // Then position camera at rocket position (in cockpit)
-          camera.position.set(
-            rocketRef.current.position.x,
-            rocketRef.current.position.y + 1.5, // Higher up for better cockpit view
-            rocketRef.current.position.z + 0.5  // Slightly behind rocket front
-          );
-          
-          // Hide or make rocket body transparent in first-person
           const rocket = rocketRef.current.children[0] as THREE.Group;
           if (rocket) {
-            // Option 1: Hide the rocket body completely
-            // rocket.visible = false;
-            
-            // Option 2: Make upper section transparent but keep windows and effects
+            // Make cockpit transparent
             const upperSection = rocket.children[0] as THREE.Mesh;
             if (upperSection && upperSection.material) {
               (upperSection.material as THREE.MeshPhongMaterial).opacity = 0.2;
               (upperSection.material as THREE.MeshPhongMaterial).transparent = true;
             }
+            
+            // Position camera inside the rocket cockpit
+            camera.position.copy(rocketRef.current.position);
+            camera.position.y += 1.5; // Cockpit height
+            
+            // Use a clean rotation approach
+            // First, determine the base rotation based on direction of movement
+            const isMovingBackward = speedRef.current < 0;
+            const movingLaterally = Math.abs(lateralSpeedRef.current) > 0.01;
+            
+            // Calculate the base rotation angle
+            // Math.PI = looking backward, 0 = looking forward
+            const baseYaw = isMovingBackward ? Math.PI : 0;
+            
+            // Set the camera's base orientation
+            camera.rotation.set(0, baseYaw, 0);
+            
+            // Don't apply roll during lateral movement in first person mode
+            // camera.rotation.z = -rollRef.current * 0.7; (removed)
+            
+            // Calculate combined movement direction
+            if (movingLaterally) {
+              // The turning angle based on lateral speed
+              const lateralAngle = lateralSpeedRef.current * 0.2; // Increased effect for more noticeable turning
+              
+              // When moving backward, inverting the lateral direction makes the controls feel more natural
+              const directionMultiplier = isMovingBackward ? -1 : 1;
+              
+              // Apply the combined angle to the camera's yaw
+              camera.rotation.y += lateralAngle * directionMultiplier;
+            }
           }
-          
-          // Look ahead of the rocket with more pronounced turning
-          const lookTarget = new THREE.Vector3(
-            camera.position.x + lateralSpeedRef.current * 20, // More pronounced turning
-            camera.position.y, 
-            camera.position.z - 100 // Look further ahead
-          );
-          camera.lookAt(lookTarget);
-          
-          // Add camera roll effect in first-person to simulate banking
-          camera.rotation.z = -rollRef.current * 0.7; // Less intense than the rocket's roll
         }
         
-        // Apply roll and slight turning to the rocket container
+        // Apply roll and slight turning to the rocket container (in both modes)
         rocketRef.current.rotation.z = -rollRef.current;
         
         // Add yaw (turn) based on lateral movement
-        // When reversing (speed < 0), turn in the same direction as movement
-        // When moving forward (speed >= 0), turn in the opposite direction
         if (speedRef.current < 0) {
           // When reversing: face right for D, left for A (same as movement direction)
           rocketRef.current.rotation.y = lateralSpeedRef.current * 0.5;
@@ -867,7 +933,7 @@ const RocketScene = () => {
         const targetRotation = -speedRef.current * 0.2;
         const rocket = rocketRef.current.children[0] as THREE.Group;
         if (rocket) {
-          rocket.rotation.x = -Math.PI / 2 + targetRotation;
+        rocket.rotation.x = -Math.PI / 2 + targetRotation;
           
           // Update fire effect with boost - Get the effects group
           const rocketEffects = rocket.children.find(child => child instanceof THREE.Group) as THREE.Group;
@@ -882,7 +948,7 @@ const RocketScene = () => {
             // Forward fire effect
             if (fire && fireGlow && speedRef.current > 0) {
               fire.visible = true;
-              fireGlow.visible = true;
+              fireGlow.visible = false;
               const boostScale = keysRef.current.space ? 2.5 : 1;
               fire.scale.y = (1 + speedRef.current * 2) * boostScale;
               fire.scale.x = keysRef.current.space ? 1.5 : 1;
@@ -897,7 +963,7 @@ const RocketScene = () => {
               fireMaterial.emissiveIntensity = keysRef.current.space ? 2 : 0.5;
               fireMaterial.color.setHex(keysRef.current.space ? 0xff2200 : 0xff4400);
               
-              // Update glow effect
+              // Update glow effect - still update in case we want to turn it on later
               fireGlow.scale.copy(fire.scale);
               fireGlow.scale.multiplyScalar(1.3); // Make glow slightly larger
               fireGlow.position.copy(fire.position);
@@ -913,7 +979,7 @@ const RocketScene = () => {
             // Reverse fire effect (blue flame)
             else if (reverseFire && reverseFireGlow && speedRef.current < 0) {
               reverseFire.visible = true;
-              reverseFireGlow.visible = true;
+              reverseFireGlow.visible = false;
               fire.visible = false;
               fireGlow.visible = false;
               
@@ -931,7 +997,7 @@ const RocketScene = () => {
               reverseFireMaterial.emissiveIntensity = keysRef.current.space ? 2.5 : 0.8;
               reverseFireMaterial.color.setHex(keysRef.current.space ? 0x00aaff : 0x4466ff);
               
-              // Update glow effect
+              // Update glow effect - still update in case we want to turn it on later
               reverseFireGlow.scale.copy(reverseFire.scale);
               reverseFireGlow.scale.multiplyScalar(1.4); // Make glow slightly larger
               reverseFireGlow.position.copy(reverseFire.position);
@@ -976,7 +1042,7 @@ const RocketScene = () => {
           }
         }
         starsPositions.needsUpdate = true;
-        
+
         // Animate portfolio sections
         let closestSection: PortfolioSection | null = null;
         let closestDistance = Infinity;
@@ -1016,7 +1082,7 @@ const RocketScene = () => {
           
           // Rotate slowly
           section.rotation.y += 0.001;
-          
+
           // Fade based on distance to rocket
           const platform = section.children[0] as THREE.Mesh;
           
@@ -1027,7 +1093,7 @@ const RocketScene = () => {
 
         // Update platform status
         setOnPlatform(isOnAnyPlatform);
-        
+
         // Update active section
         setActiveSection(closestSection);
 
@@ -1278,12 +1344,12 @@ const RocketScene = () => {
       {/* Camera mode toggle button */}
       <button 
         onClick={toggleCameraMode}
-        className="absolute top-4 left-4 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md z-10 flex items-center"
+        className={`absolute top-4 left-4 px-3 py-2 ${cameraMode === 'first-person' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-md z-10 flex items-center shadow-lg`}
       >
         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
         </svg>
-        {cameraMode === 'third-person' ? 'First Person View' : 'Third Person View'}
+        {cameraMode === 'first-person' ? 'Switch to Third Person' : 'Switch to First Person'}
       </button>
       
       {/* Rocket customization toggle button */}
@@ -1438,7 +1504,7 @@ const RocketScene = () => {
             {activeSection.content ? (
               <div dangerouslySetInnerHTML={{ __html: activeSection.content.replace(/\n/g, '<br>') }} />
             ) : (
-              <p>{activeSection.description}</p>
+          <p>{activeSection.description}</p>
             )}
           </div>
           
@@ -1452,8 +1518,8 @@ const RocketScene = () => {
               >
                 Learn More
               </a>
-            </div>
-          )}
+        </div>
+      )}
         </div>
       )}
       
