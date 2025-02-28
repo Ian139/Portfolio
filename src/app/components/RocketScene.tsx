@@ -14,6 +14,13 @@ interface PortfolioSection {
   visited?: boolean; // Track if section has been visited
 }
 
+// Define rocket customization options
+interface RocketCustomization {
+  bodyColor: number;
+  accentColor: number;
+  windowColor: number;
+}
+
 const portfolioSections: PortfolioSection[] = [
   {
     position: -50,
@@ -114,6 +121,40 @@ const RocketScene = () => {
   const [visitedSections, setVisitedSections] = useState<Set<string>>(new Set());
   const [showFireworks, setShowFireworks] = useState(false);
   const fireworksTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // New states for our added features
+  const [cameraMode, setCameraMode] = useState<'third-person' | 'first-person'>('third-person');
+  const [showCustomizationPanel, setShowCustomizationPanel] = useState(false);
+  const [rocketCustomization, setRocketCustomization] = useState<RocketCustomization>({
+    bodyColor: 0x888888,
+    accentColor: 0x777777,
+    windowColor: 0x44aaff
+  });
+  const [asteroidCollision, setAsteroidCollision] = useState(false);
+  const asteroidsRef = useRef<THREE.Group[]>([]);
+  const collisionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Function to handle camera mode toggle
+  const toggleCameraMode = () => {
+    setCameraMode(prev => {
+      const newMode = prev === 'third-person' ? 'first-person' : 'third-person';
+      
+      // Immediately adjust camera FOV based on mode
+      if (rocketRef.current) {
+        const camera = rocketRef.current.parent?.children.find(
+          child => child instanceof THREE.PerspectiveCamera
+        ) as THREE.PerspectiveCamera;
+        
+        if (camera) {
+          // Wider FOV for first-person to give better cockpit feel
+          camera.fov = newMode === 'first-person' ? 90 : 75;
+          camera.updateProjectionMatrix();
+        }
+      }
+      
+      return newMode;
+    });
+  };
 
   // Function to reset rocket position and regenerate platform positions
   const resetRocket = () => {
@@ -129,18 +170,37 @@ const RocketScene = () => {
       ) as THREE.PerspectiveCamera;
       
       if (camera) {
-        // Position the camera so that the rocket will be at 0,0,0
-        // Since rocket is positioned at camera.position.z - 20, camera.position.z should be 20
-        // And camera.position.x should be 0 to center the rocket horizontally
-        camera.position.set(
-          0, // Set camera X to 0 so rocket will be at X=0 
-          8, // Keep Y the same
-          20 // Set camera Z to 20 so rocket will be at Z=0
-        );
+        // Position the camera based on current camera mode
+        if (cameraMode === 'third-person') {
+          // Third-person camera reset
+          camera.position.set(
+            0, // Set camera X to 0 so rocket will be at X=0 
+            8, // Keep Y the same
+            20 // Set camera Z to 20 so rocket will be at Z=0
+          );
+          
+          // The animation loop will position the rocket at (0, 0, 0) relative to the camera
+          // but let's set it explicitly now to ensure immediate update
+          rocketRef.current.position.set(0, 0, 0);
+          
+          // Make camera look at the rocket
+          camera.lookAt(rocketRef.current.position);
+        } else {
+          // First-person camera reset
+          // Position rocket at origin
+          rocketRef.current.position.set(0, 0, 0);
+          
+          // Position camera in cockpit
+          camera.position.set(
+            0,
+            rocketRef.current.position.y + 1.5, // Higher up for cockpit view
+            0.5 // Slightly behind rocket front
+          );
+          
+          // Look forward
+          camera.lookAt(new THREE.Vector3(0, camera.position.y, -100));
+        }
         
-        // The animation loop will position the rocket at (0, 0, 0) relative to the camera
-        // but let's set it explicitly now to ensure immediate update
-        rocketRef.current.position.set(0, 0, 0);
         rocketRef.current.rotation.set(0, 0, 0);
         
         // Reset the rocket's rotation
@@ -149,10 +209,19 @@ const RocketScene = () => {
           rocket.rotation.x = -Math.PI / 2; // Original forward-facing orientation
           rocket.rotation.y = 0;
           rocket.rotation.z = 0;
+          
+          // Ensure rocket is visible with proper opacity in third-person mode
+          if (cameraMode === 'third-person') {
+            rocket.visible = true;
+            
+            // Restore upper section opacity
+            const upperSection = rocket.children[0] as THREE.Mesh;
+            if (upperSection && upperSection.material) {
+              (upperSection.material as THREE.MeshPhongMaterial).opacity = 1.0;
+              (upperSection.material as THREE.MeshPhongMaterial).transparent = false;
+            }
+          }
         }
-        
-        // Make camera look at the rocket
-        camera.lookAt(rocketRef.current.position);
         
         // Update position state immediately to reflect the reset
         setRocketPosition({
@@ -194,6 +263,31 @@ const RocketScene = () => {
       if (fireworksTimeoutRef.current) {
         clearTimeout(fireworksTimeoutRef.current);
         fireworksTimeoutRef.current = null;
+      }
+      
+      // Reset asteroids when resetting the rocket
+      if (asteroidsRef.current.length > 0) {
+        asteroidsRef.current.forEach(asteroid => {
+          // Generate new random positions
+          asteroid.position.set(
+            (Math.random() - 0.5) * 300,
+            (Math.random() - 0.5) * 200,
+            camera.position.z - (Math.random() * 400 + 100)
+          );
+          // Reset rotation
+          asteroid.rotation.set(
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2
+          );
+        });
+      }
+      
+      // Reset collision state
+      setAsteroidCollision(false);
+      if (collisionTimeoutRef.current) {
+        clearTimeout(collisionTimeoutRef.current);
+        collisionTimeoutRef.current = null;
       }
     }
   };
@@ -280,22 +374,47 @@ const RocketScene = () => {
     // Upper section (octagonal)
     const upperGeometry = new THREE.CylinderGeometry(1.2, 1.2, 1.5, 8, 1);
     const upperMaterial = new THREE.MeshPhongMaterial({ 
-      color: 0x888888,
+      color: rocketCustomization.bodyColor,
       flatShading: true 
     });
     const upperSection = new THREE.Mesh(upperGeometry, upperMaterial);
     upperSection.position.y = 1;
     rocket.add(upperSection);
 
+    // Add windows to the upper section
+    const windowGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+    const windowMaterial = new THREE.MeshPhongMaterial({ 
+      color: rocketCustomization.windowColor,
+      emissive: 0x3388cc,
+      emissiveIntensity: 0.3,
+      flatShading: true 
+    });
+    
+    // Create 3 windows around the upper section
+    for (let i = 0; i < 3; i++) {
+      const angle = (i * Math.PI * 2) / 3;
+      const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+      windowMesh.position.set(
+        Math.cos(angle) * 1.2,
+        1, // Same height as upper section
+        Math.sin(angle) * 1.2
+      );
+      rocket.add(windowMesh);
+    }
+
     // Lower section (slightly larger octagonal)
     const lowerGeometry = new THREE.CylinderGeometry(1.4, 1.4, 1.5, 8, 1);
     const lowerMaterial = new THREE.MeshPhongMaterial({ 
-      color: 0x777777,
+      color: rocketCustomization.accentColor,
       flatShading: true 
     });
     const lowerSection = new THREE.Mesh(lowerGeometry, lowerMaterial);
     lowerSection.position.y = -0.5;
     rocket.add(lowerSection);
+
+    // Create rocket effects group to hold all fire effects
+    const rocketEffects = new THREE.Group();
+    rocket.add(rocketEffects);
 
     // Create low-poly fire effect
     const fireGeometry = new THREE.ConeGeometry(0.7, 2, 8);
@@ -311,7 +430,7 @@ const RocketScene = () => {
     fire.position.y = -2;
     fire.position.z = 0;
     fire.rotation.x = -Math.PI; // Point the fire backward
-    rocket.add(fire);
+    rocketEffects.add(fire);
     
     // Add fire glow effect
     const fireGlowGeometry = new THREE.ConeGeometry(1.2, 2.5, 8);
@@ -325,7 +444,7 @@ const RocketScene = () => {
     const fireGlow = new THREE.Mesh(fireGlowGeometry, fireGlowMaterial);
     fireGlow.position.copy(fire.position);
     fireGlow.rotation.copy(fire.rotation);
-    rocket.add(fireGlow);
+    rocketEffects.add(fireGlow);
     
     // Create reverse fire (blue flame at the front)
     const reverseFireGeometry = new THREE.ConeGeometry(0.7, 2, 8);
@@ -342,7 +461,7 @@ const RocketScene = () => {
     reverseFire.position.z = 0;
     reverseFire.rotation.x = 0; // Point the fire forward
     reverseFire.visible = false; // Initially hidden
-    rocket.add(reverseFire);
+    rocketEffects.add(reverseFire);
     
     // Add reverse fire glow effect
     const reverseFireGlowGeometry = new THREE.ConeGeometry(1.2, 2.5, 8);
@@ -357,8 +476,8 @@ const RocketScene = () => {
     reverseFireGlow.position.copy(reverseFire.position);
     reverseFireGlow.rotation.copy(reverseFire.rotation);
     reverseFireGlow.visible = false; // Initially hidden
-    rocket.add(reverseFireGlow);
-    
+    rocketEffects.add(reverseFireGlow);
+
     // Create a container for the rocket that will handle the roll
     const rocketContainer = new THREE.Group();
     rocketContainer.add(rocket);
@@ -424,6 +543,94 @@ const RocketScene = () => {
     const sunLight = new THREE.DirectionalLight(0xffffff, 1);
     sunLight.position.copy(sunGroup.position);
     scene.add(sunLight);
+
+    // Create asteroids field
+    const asteroidGroup = new THREE.Group();
+    scene.add(asteroidGroup);
+    
+    // Create 50 asteroids
+    for (let i = 0; i < 50; i++) {
+      // Create a random asteroid shape using icosahedron with random vertices
+      const asteroidGeometry = new THREE.IcosahedronGeometry(
+        Math.random() * 3 + 1, // Random size between 1-4
+        0 // Detail level
+      );
+      
+      // Modify vertices to make it look more like an asteroid
+      const vertices = asteroidGeometry.attributes.position;
+      for (let j = 0; j < vertices.count; j++) {
+        const x = vertices.getX(j);
+        const y = vertices.getY(j);
+        const z = vertices.getZ(j);
+        
+        // Add random displacement to each vertex
+        vertices.setX(j, x + (Math.random() - 0.5) * 0.5);
+        vertices.setY(j, y + (Math.random() - 0.5) * 0.5);
+        vertices.setZ(j, z + (Math.random() - 0.5) * 0.5);
+      }
+      
+      // Create a material with random colors in the gray-brown range
+      const hue = Math.random() * 0.1 + 0.05; // 0.05-0.15 range (brownish)
+      const saturation = Math.random() * 0.3 + 0.1; // 0.1-0.4 range
+      const lightness = Math.random() * 0.2 + 0.2; // 0.2-0.4 range (darker)
+      
+      const asteroidMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL(hue, saturation, lightness),
+        flatShading: true,
+        roughness: 0.8,
+        metalness: 0.2
+      });
+      
+      const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial);
+      
+      // Position asteroids randomly in space with more in front of the rocket
+      asteroid.position.set(
+        (Math.random() - 0.5) * 300, // X: Spread horizontally
+        (Math.random() - 0.5) * 200, // Y: Spread vertically
+        camera.position.z - (Math.random() * 400 + 100) // Z: Positioned ahead of the rocket
+      );
+      
+      // Random rotation
+      asteroid.rotation.set(
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2
+      );
+      
+      // Add to scene and store reference
+      asteroidGroup.add(asteroid);
+      asteroidsRef.current.push(asteroid as unknown as THREE.Group);
+    }
+    
+    // Also add a planetary ring system
+    const ringGroup = new THREE.Group();
+    
+    // Create the main ring
+    const ringGeometry = new THREE.RingGeometry(30, 60, 64);
+    
+    // Modify UVs to enable texture repetition along the ring
+    const ringUvs = ringGeometry.attributes.uv;
+    for (let i = 0; i < ringUvs.count; i++) {
+      const u = ringUvs.getX(i);
+      
+      // Map u from 0-1 to 0-2π for proper wrapping
+      ringUvs.setX(i, u * 2 * Math.PI);
+    }
+    
+    const ringMaterial = new THREE.MeshStandardMaterial({
+      color: 0xddbb88,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.7,
+      roughness: 0.8
+    });
+    
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.rotation.x = Math.PI / 2; // Make it horizontal
+    ring.position.set(60, -20, -180); // Position it in the distance
+    
+    ringGroup.add(ring);
+    scene.add(ringGroup);
 
     // Update keyboard handler
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -506,9 +713,9 @@ const RocketScene = () => {
 
     // Animation loop
     const animate = () => {
-      // Update sun position for day/night cycle (30 second cycle)
-      cycleTimeRef.current = (cycleTimeRef.current + 1) % (30 * 60); // 30 seconds at 60fps
-      const cycleProgress = cycleTimeRef.current / (30 * 60);
+      // Update sun position for day/night cycle (now 120 second cycle instead of 30)
+      cycleTimeRef.current = (cycleTimeRef.current + 0.25) % (120 * 60); // 120 seconds at 60fps (with slower increment)
+      const cycleProgress = cycleTimeRef.current / (120 * 60);
       const sunAngle = cycleProgress * Math.PI * 2;
 
       if (sunRef.current) {
@@ -581,9 +788,66 @@ const RocketScene = () => {
         // Move camera and rocket in X axis
         camera.position.x += lateralSpeedRef.current;
         
-        // Position rocket relative to camera
-        rocketRef.current.position.z = camera.position.z - 20;
-        rocketRef.current.position.x = camera.position.x;
+        // Handle camera mode positioning
+        if (cameraMode === 'third-person') {
+          // Third-person view
+          rocketRef.current.position.z = camera.position.z - 20;
+          rocketRef.current.position.x = camera.position.x;
+          
+          // Make rocket fully visible and restore opacity
+          const rocket = rocketRef.current.children[0] as THREE.Group;
+          if (rocket) {
+            rocket.visible = true;
+            
+            // Restore upper section opacity
+            const upperSection = rocket.children[0] as THREE.Mesh;
+            if (upperSection && upperSection.material) {
+              (upperSection.material as THREE.MeshPhongMaterial).opacity = 1.0;
+              (upperSection.material as THREE.MeshPhongMaterial).transparent = false;
+            }
+          }
+          
+          // Set camera to look at the rocket
+          camera.lookAt(rocketRef.current.position);
+        } else {
+          // First-person view
+          
+          // First update rocket position based on camera movement
+          rocketRef.current.position.z = camera.position.z - 0.5; // Slightly in front of camera
+          rocketRef.current.position.x = camera.position.x;
+          
+          // Then position camera at rocket position (in cockpit)
+          camera.position.set(
+            rocketRef.current.position.x,
+            rocketRef.current.position.y + 1.5, // Higher up for better cockpit view
+            rocketRef.current.position.z + 0.5  // Slightly behind rocket front
+          );
+          
+          // Hide or make rocket body transparent in first-person
+          const rocket = rocketRef.current.children[0] as THREE.Group;
+          if (rocket) {
+            // Option 1: Hide the rocket body completely
+            // rocket.visible = false;
+            
+            // Option 2: Make upper section transparent but keep windows and effects
+            const upperSection = rocket.children[0] as THREE.Mesh;
+            if (upperSection && upperSection.material) {
+              (upperSection.material as THREE.MeshPhongMaterial).opacity = 0.2;
+              (upperSection.material as THREE.MeshPhongMaterial).transparent = true;
+            }
+          }
+          
+          // Look ahead of the rocket with more pronounced turning
+          const lookTarget = new THREE.Vector3(
+            camera.position.x + lateralSpeedRef.current * 20, // More pronounced turning
+            camera.position.y, 
+            camera.position.z - 100 // Look further ahead
+          );
+          camera.lookAt(lookTarget);
+          
+          // Add camera roll effect in first-person to simulate banking
+          camera.rotation.z = -rollRef.current * 0.7; // Less intense than the rocket's roll
+        }
         
         // Apply roll and slight turning to the rocket container
         rocketRef.current.rotation.z = -rollRef.current;
@@ -602,81 +866,88 @@ const RocketScene = () => {
         // Apply pitch based on speed to the rocket itself
         const targetRotation = -speedRef.current * 0.2;
         const rocket = rocketRef.current.children[0] as THREE.Group;
-        rocket.rotation.x = -Math.PI / 2 + targetRotation;
-        
-        // Update fire effect with boost
-        const fire = rocket.children[2] as THREE.Mesh;
-        const fireGlow = rocket.children[3] as THREE.Mesh;
-        const reverseFire = rocket.children[4] as THREE.Mesh; 
-        const reverseFireGlow = rocket.children[5] as THREE.Mesh;
-        
-        // Forward fire effect
-        if (fire && speedRef.current > 0) {
-          fire.visible = true;
-          fireGlow.visible = true;
-          const boostScale = keysRef.current.space ? 2.5 : 1;
-          fire.scale.y = (1 + speedRef.current * 2) * boostScale;
-          fire.scale.x = keysRef.current.space ? 1.5 : 1;
-          fire.scale.z = keysRef.current.space ? 1.5 : 1;
+        if (rocket) {
+          rocket.rotation.x = -Math.PI / 2 + targetRotation;
           
-          // Fix fire position to prevent glitching
-          fire.position.y = -2 - (fire.scale.y * 0.5);
+          // Update fire effect with boost - Get the effects group
+          const rocketEffects = rocket.children.find(child => child instanceof THREE.Group) as THREE.Group;
           
-          // Keep fire at the back of the rocket
-          const fireMaterial = fire.material as THREE.MeshPhongMaterial;
-          fireMaterial.opacity = Math.min(0.8, speedRef.current * 2);
-          fireMaterial.emissiveIntensity = keysRef.current.space ? 2 : 0.5;
-          fireMaterial.color.setHex(keysRef.current.space ? 0xff2200 : 0xff4400);
-          
-          // Update glow effect
-          fireGlow.scale.copy(fire.scale);
-          fireGlow.scale.multiplyScalar(1.3); // Make glow slightly larger
-          fireGlow.position.copy(fire.position);
-          
-          const glowMaterial = fireGlow.material as THREE.MeshBasicMaterial;
-          glowMaterial.opacity = fireMaterial.opacity * 0.5;
-          glowMaterial.color.setHex(keysRef.current.space ? 0xff6600 : 0xff7700);
-          
-          // Hide reverse fire
-          reverseFire.visible = false;
-          reverseFireGlow.visible = false;
-        } 
-        // Reverse fire effect (blue flame)
-        else if (reverseFire && speedRef.current < 0) {
-          reverseFire.visible = true;
-          reverseFireGlow.visible = true;
-          fire.visible = false;
-          fireGlow.visible = false;
-          
-          const reverseBoostScale = keysRef.current.space ? 3 : 1.5; // Larger scale for space
-          reverseFire.scale.y = (1 + Math.abs(speedRef.current) * 2) * reverseBoostScale;
-          reverseFire.scale.x = keysRef.current.space ? 1.8 : 1.2;
-          reverseFire.scale.z = keysRef.current.space ? 1.8 : 1.2;
-          
-          // Fix fire position to prevent glitching
-          reverseFire.position.y = 2.5 + (reverseFire.scale.y * 0.4);
-          
-          // Update fire material
-          const reverseFireMaterial = reverseFire.material as THREE.MeshPhongMaterial;
-          reverseFireMaterial.opacity = Math.min(0.8, Math.abs(speedRef.current) * 2);
-          reverseFireMaterial.emissiveIntensity = keysRef.current.space ? 2.5 : 0.8;
-          reverseFireMaterial.color.setHex(keysRef.current.space ? 0x00aaff : 0x4466ff);
-          
-          // Update glow effect
-          reverseFireGlow.scale.copy(reverseFire.scale);
-          reverseFireGlow.scale.multiplyScalar(1.4); // Make glow slightly larger
-          reverseFireGlow.position.copy(reverseFire.position);
-          
-          const reverseGlowMaterial = reverseFireGlow.material as THREE.MeshBasicMaterial;
-          reverseGlowMaterial.opacity = reverseFireMaterial.opacity * 0.5;
-          reverseGlowMaterial.color.setHex(keysRef.current.space ? 0x88ccff : 0x66aaff);
-        } 
-        else {
-          // Hide both fires when not moving
-          fire.visible = false;
-          fireGlow.visible = false;
-          reverseFire.visible = false;
-          reverseFireGlow.visible = false;
+          if (rocketEffects && rocketEffects.children.length >= 4) {
+            // Get the fire effects from the rocketEffects group
+            const fire = rocketEffects.children[0] as THREE.Mesh;
+            const fireGlow = rocketEffects.children[1] as THREE.Mesh;
+            const reverseFire = rocketEffects.children[2] as THREE.Mesh; 
+            const reverseFireGlow = rocketEffects.children[3] as THREE.Mesh;
+            
+            // Forward fire effect
+            if (fire && fireGlow && speedRef.current > 0) {
+              fire.visible = true;
+              fireGlow.visible = true;
+              const boostScale = keysRef.current.space ? 2.5 : 1;
+              fire.scale.y = (1 + speedRef.current * 2) * boostScale;
+              fire.scale.x = keysRef.current.space ? 1.5 : 1;
+              fire.scale.z = keysRef.current.space ? 1.5 : 1;
+              
+              // Fix fire position to prevent glitching
+              fire.position.y = -2 - (fire.scale.y * 0.5);
+              
+              // Keep fire at the back of the rocket
+              const fireMaterial = fire.material as THREE.MeshPhongMaterial;
+              fireMaterial.opacity = Math.min(0.8, speedRef.current * 2);
+              fireMaterial.emissiveIntensity = keysRef.current.space ? 2 : 0.5;
+              fireMaterial.color.setHex(keysRef.current.space ? 0xff2200 : 0xff4400);
+              
+              // Update glow effect
+              fireGlow.scale.copy(fire.scale);
+              fireGlow.scale.multiplyScalar(1.3); // Make glow slightly larger
+              fireGlow.position.copy(fire.position);
+              
+              const glowMaterial = fireGlow.material as THREE.MeshBasicMaterial;
+              glowMaterial.opacity = fireMaterial.opacity * 0.5;
+              glowMaterial.color.setHex(keysRef.current.space ? 0xff6600 : 0xff7700);
+              
+              // Hide reverse fire
+              reverseFire.visible = false;
+              reverseFireGlow.visible = false;
+            } 
+            // Reverse fire effect (blue flame)
+            else if (reverseFire && reverseFireGlow && speedRef.current < 0) {
+              reverseFire.visible = true;
+              reverseFireGlow.visible = true;
+              fire.visible = false;
+              fireGlow.visible = false;
+              
+              const reverseBoostScale = keysRef.current.space ? 3 : 1.5; // Larger scale for space
+              reverseFire.scale.y = (1 + Math.abs(speedRef.current) * 2) * reverseBoostScale;
+              reverseFire.scale.x = keysRef.current.space ? 1.8 : 1.2;
+              reverseFire.scale.z = keysRef.current.space ? 1.8 : 1.2;
+              
+              // Fix fire position to prevent glitching
+              reverseFire.position.y = 2.5 + (reverseFire.scale.y * 0.4);
+              
+              // Update fire material
+              const reverseFireMaterial = reverseFire.material as THREE.MeshPhongMaterial;
+              reverseFireMaterial.opacity = Math.min(0.8, Math.abs(speedRef.current) * 2);
+              reverseFireMaterial.emissiveIntensity = keysRef.current.space ? 2.5 : 0.8;
+              reverseFireMaterial.color.setHex(keysRef.current.space ? 0x00aaff : 0x4466ff);
+              
+              // Update glow effect
+              reverseFireGlow.scale.copy(reverseFire.scale);
+              reverseFireGlow.scale.multiplyScalar(1.4); // Make glow slightly larger
+              reverseFireGlow.position.copy(reverseFire.position);
+              
+              const reverseGlowMaterial = reverseFireGlow.material as THREE.MeshBasicMaterial;
+              reverseGlowMaterial.opacity = reverseFireMaterial.opacity * 0.5;
+              reverseGlowMaterial.color.setHex(keysRef.current.space ? 0x88ccff : 0x66aaff);
+            } 
+            else {
+              // Hide both fires when not moving
+              fire.visible = false;
+              fireGlow.visible = false;
+              reverseFire.visible = false;
+              reverseFireGlow.visible = false;
+            }
+          }
         }
         
         // Update stars positions
@@ -706,9 +977,6 @@ const RocketScene = () => {
         }
         starsPositions.needsUpdate = true;
         
-        // Keep camera looking at rocket
-        camera.lookAt(rocketRef.current.position);
-
         // Animate portfolio sections
         let closestSection: PortfolioSection | null = null;
         let closestDistance = Infinity;
@@ -731,11 +999,6 @@ const RocketScene = () => {
           
           if (isOnPlatform) {
             isOnAnyPlatform = true;
-            
-            // Remove the following line to avoid marking sections as visited just by landing on them
-            // if (activeSection && activeSection.title === portfolioSections[index].title) {
-            //   handleSectionVisit(activeSection.title);
-            // }
           }
           
           const textHeightLift = distance < 30 ? 6 : 0; // Lift text up when rocket is within 30 units
@@ -753,7 +1016,7 @@ const RocketScene = () => {
           
           // Rotate slowly
           section.rotation.y += 0.001;
-
+          
           // Fade based on distance to rocket
           const platform = section.children[0] as THREE.Mesh;
           
@@ -767,6 +1030,42 @@ const RocketScene = () => {
         
         // Update active section
         setActiveSection(closestSection);
+
+        // Animate and check collisions with asteroids
+        let hasCollision = false;
+        asteroidsRef.current.forEach(asteroid => {
+          // Rotate slowly for a dynamic feel
+          asteroid.rotation.x += 0.001;
+          asteroid.rotation.y += 0.001;
+          
+          // Check if asteroid is too far behind the camera, if so, reposition it ahead
+          if (asteroid.position.z > camera.position.z + 100) {
+            asteroid.position.z = camera.position.z - (Math.random() * 400 + 100);
+            asteroid.position.x = (Math.random() - 0.5) * 300;
+            asteroid.position.y = (Math.random() - 0.5) * 200;
+          }
+          
+          // Check for collision with rocket
+          if (!asteroidCollision && rocketRef.current) { // Only check if not already in collision state
+            const distance = asteroid.position.distanceTo(rocketRef.current.position);
+            if (distance < 5) { // Collision radius
+              hasCollision = true;
+            }
+          }
+        });
+        
+        // Handle collision if detected
+        if (hasCollision && !asteroidCollision) {
+          setAsteroidCollision(true);
+          // Reset collision state after 1.5 seconds
+          collisionTimeoutRef.current = setTimeout(() => {
+            setAsteroidCollision(false);
+          }, 1500);
+          
+          // Add collision sound or effect here if desired
+          // Slow down the rocket as collision penalty
+          speedRef.current = speedRef.current * 0.3;
+        }
 
         // Update rocket position state for display
         setRocketPosition({
@@ -801,7 +1100,7 @@ const RocketScene = () => {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, [mounted]);
+  }, [mounted, rocketCustomization]);
 
   // Direct F key handling outside the ThreeJS context
   useEffect(() => {
@@ -913,6 +1212,53 @@ const RocketScene = () => {
     );
   };
 
+  // Function to apply customization changes to the rocket
+  const applyCustomization = (property: keyof RocketCustomization, color: number) => {
+    setRocketCustomization(prev => ({
+      ...prev,
+      [property]: color
+    }));
+    
+    // Apply changes to the meshes directly if rocket exists
+    if (rocketRef.current) {
+      const rocket = rocketRef.current.children[0] as THREE.Group;
+      if (rocket) {
+        // Find mesh components by their positions in the hierarchy
+        const upperSection = rocket.children[0] as THREE.Mesh;
+        const lowerSection = rocket.children[4] as THREE.Mesh;
+        const windows = [
+          rocket.children[1] as THREE.Mesh,
+          rocket.children[2] as THREE.Mesh,
+          rocket.children[3] as THREE.Mesh
+        ];
+        
+        // Update upper section (body)
+        if (property === 'bodyColor' && upperSection) {
+          (upperSection.material as THREE.MeshPhongMaterial).color.setHex(color);
+        }
+        
+        // Update lower section (accent)
+        if (property === 'accentColor' && lowerSection) {
+          (lowerSection.material as THREE.MeshPhongMaterial).color.setHex(color);
+        }
+        
+        // Update windows
+        if (property === 'windowColor') {
+          windows.forEach(window => {
+            if (window) {
+              (window.material as THREE.MeshPhongMaterial).color.setHex(color);
+            }
+          });
+        }
+      }
+    }
+  };
+
+  // Toggle customization panel
+  const toggleCustomizationPanel = () => {
+    setShowCustomizationPanel(prev => !prev);
+  };
+
   if (!mounted) {
     return null;
   }
@@ -923,6 +1269,92 @@ const RocketScene = () => {
       
       {/* Fullscreen fireworks effect */}
       {showFireworks && <Fireworks />}
+      
+      {/* Collision overlay effect */}
+      {asteroidCollision && (
+        <div className="collision-flash"></div>
+      )}
+      
+      {/* Camera mode toggle button */}
+      <button 
+        onClick={toggleCameraMode}
+        className="absolute top-4 left-4 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md z-10 flex items-center"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+        </svg>
+        {cameraMode === 'third-person' ? 'First Person View' : 'Third Person View'}
+      </button>
+      
+      {/* Rocket customization toggle button */}
+      <button 
+        onClick={toggleCustomizationPanel}
+        className="absolute top-16 left-4 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md z-10 flex items-center"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+        </svg>
+        Customize Rocket
+      </button>
+      
+      {/* Customization panel */}
+      {showCustomizationPanel && (
+        <div className="absolute top-28 left-4 p-4 bg-gray-900 border border-gray-700 text-white rounded-md z-20 w-64">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-lg font-bold">Rocket Customization</h3>
+            <button 
+              onClick={toggleCustomizationPanel}
+              className="text-gray-400 hover:text-white"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+          </div>
+          
+          <div className="mb-3">
+            <label className="block text-sm mb-1">Body Color</label>
+            <div className="flex space-x-2">
+              {[0x888888, 0xff4444, 0x44ff44, 0x4444ff, 0xffff44].map(color => (
+                <button
+                  key={`body-${color}`}
+                  className={`w-8 h-8 rounded-full border-2 ${rocketCustomization.bodyColor === color ? 'border-white' : 'border-transparent'}`}
+                  style={{ backgroundColor: `#${color.toString(16)}` }}
+                  onClick={() => applyCustomization('bodyColor', color)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div className="mb-3">
+            <label className="block text-sm mb-1">Accent Color</label>
+            <div className="flex space-x-2">
+              {[0x777777, 0xcc3333, 0x33cc33, 0x3333cc, 0xcccc33].map(color => (
+                <button
+                  key={`accent-${color}`}
+                  className={`w-8 h-8 rounded-full border-2 ${rocketCustomization.accentColor === color ? 'border-white' : 'border-transparent'}`}
+                  style={{ backgroundColor: `#${color.toString(16)}` }}
+                  onClick={() => applyCustomization('accentColor', color)}
+                />
+              ))}
+            </div>
+          </div>
+          
+          <div className="mb-3">
+            <label className="block text-sm mb-1">Window Color</label>
+            <div className="flex space-x-2">
+              {[0x44aaff, 0x66ffff, 0xaaffaa, 0xffaaff, 0xffffff].map(color => (
+                <button
+                  key={`window-${color}`}
+                  className={`w-8 h-8 rounded-full border-2 ${rocketCustomization.windowColor === color ? 'border-white' : 'border-transparent'}`}
+                  style={{ backgroundColor: `#${color.toString(16)}` }}
+                  onClick={() => applyCustomization('windowColor', color)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Progress Counter */}
       <div className="absolute top-4 right-4 flex items-center">
@@ -949,7 +1381,7 @@ const RocketScene = () => {
       </div>
       
       {/* Debug info, manual trigger, and reset button */}
-      <div className="absolute top-0 left-0 p-2 bg-black bg-opacity-50 text-white text-xs">
+      <div className="absolute bottom-0 left-0 p-2 bg-black bg-opacity-50 text-white text-xs">
         <div className="flex justify-between items-center mb-2">
           <span className="font-bold">Debug Info</span>
           <button 
@@ -970,13 +1402,13 @@ const RocketScene = () => {
         
         <div>On platform: {onPlatform ? 'YES' : 'NO'}</div>
         <div>Speed: {speedRef.current.toFixed(2)}</div>
-        <div>F key pressed: {keysRef.current.f ? 'YES' : 'NO'}</div>
+        <div>Camera mode: {cameraMode}</div>
         <div>Active section: {activeSection?.title || 'None'}</div>
+        <div>Asteroid collision: {asteroidCollision ? 'YES' : 'NO'}</div>
         <button 
           onClick={() => {
             if (onPlatform && activeSection) {
               setShowTablet(true);
-              // No need to call handleSectionVisit here, as the useEffect will handle it
             }
           }}
           className="mt-2 px-2 py-1 bg-red-500 rounded text-white"
@@ -1032,14 +1464,7 @@ const RocketScene = () => {
         </div>
       )}
       
-      {activeSection && !showTablet && (
-        <div className="absolute bottom-0 left-0 right-0 p-4 text-center text-white bg-black">
-          <h2 className="text-xl font-bold">{activeSection.title}</h2>
-          <p>{activeSection.description}</p>
-        </div>
-      )}
-      
-      {/* Styles for counter and fireworks */}
+      {/* Styles for counter, fireworks, and new features */}
       <style jsx>{`
         .progress-counter {
           background: rgba(0, 0, 0, 0.6);
@@ -1250,6 +1675,24 @@ const RocketScene = () => {
             transform: translate(var(--x), var(--y)) scale(1);
             box-shadow: 0 0 5px var(--color), 0 0 10px var(--color);
           }
+        }
+        
+        .collision-flash {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100vw;
+          height: 100vh;
+          background-color: rgba(255, 0, 0, 0.3);
+          pointer-events: none;
+          z-index: 25;
+          animation: flash 0.5s ease-out 3;
+        }
+        
+        @keyframes flash {
+          0% { opacity: 1; }
+          50% { opacity: 0.5; }
+          100% { opacity: 0; }
         }
       `}</style>
     </div>
