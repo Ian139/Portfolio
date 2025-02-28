@@ -10,6 +10,7 @@ interface PortfolioSection {
   color: number;
   link?: string; // Optional link for each section
   content?: string; // Detailed content to show in panel
+  xPosition?: number; // X position in space
 }
 
 const portfolioSections: PortfolioSection[] = [
@@ -22,9 +23,9 @@ const portfolioSections: PortfolioSection[] = [
 
 Navigate through space using:
 - W/S: Move forward/backward
-- A/D: Roll left/right
+- A/D: Move left/right
 - Space: Boost
-- Enter: View section details
+- F: Interact with platforms
 
 Explore different sections to learn more about me and my work.`
   },
@@ -86,10 +87,17 @@ Each project demonstrates my commitment to creating engaging user experiences.`
   }
 ];
 
+// Assign random X positions to each section
+portfolioSections.forEach(section => {
+  // Random X position between -80 and 80
+  section.xPosition = (Math.random() - 0.5) * 160;
+});
+
 const RocketScene = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rocketRef = useRef<THREE.Group | undefined>(undefined);
   const speedRef = useRef(0);
+  const lateralSpeedRef = useRef(0); // For A/D movement
   const rollRef = useRef(0);
   const keysRef = useRef({ w: false, s: false, a: false, d: false, space: false, f: false });
   const sectionsRef = useRef<THREE.Group[]>([]);
@@ -100,6 +108,40 @@ const RocketScene = () => {
   const [showTablet, setShowTablet] = useState(false);
   const [onPlatform, setOnPlatform] = useState(false);
   const fJustPressedRef = useRef(false);
+  const initialCameraPosition = useRef<{x: number, y: number, z: number} | null>(null);
+
+  // Function to reset rocket position
+  const resetRocket = () => {
+    if (rocketRef.current && initialCameraPosition.current) {
+      speedRef.current = 0;
+      lateralSpeedRef.current = 0;
+      rollRef.current = 0;
+      
+      // Reset camera position
+      const camera = rocketRef.current.parent?.children.find(
+        child => child instanceof THREE.PerspectiveCamera
+      ) as THREE.PerspectiveCamera;
+      
+      if (camera) {
+        camera.position.set(
+          initialCameraPosition.current.x, 
+          initialCameraPosition.current.y, 
+          initialCameraPosition.current.z
+        );
+        
+        // Reset rocket position relative to camera
+        rocketRef.current.position.x = 0;
+        rocketRef.current.position.z = camera.position.z - 20;
+        rocketRef.current.rotation.z = 0;
+        
+        // Reset the rocket's rotation
+        const rocket = rocketRef.current.children[0] as THREE.Group;
+        if (rocket) {
+          rocket.rotation.x = -Math.PI / 2;
+        }
+      }
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -121,6 +163,11 @@ const RocketScene = () => {
     );
     // Position camera above and to the right
     camera.position.set(10, 8, 20);
+    initialCameraPosition.current = { 
+      x: camera.position.x, 
+      y: camera.position.y, 
+      z: camera.position.z 
+    };
     camera.lookAt(0, 0, 0);
 
     // Renderer setup
@@ -167,6 +214,52 @@ const RocketScene = () => {
     fire.position.z = 0;
     fire.rotation.x = -Math.PI; // Point the fire backward
     rocket.add(fire);
+    
+    // Add fire glow effect
+    const fireGlowGeometry = new THREE.ConeGeometry(1.2, 2.5, 8);
+    const fireGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff5500,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending
+    });
+    const fireGlow = new THREE.Mesh(fireGlowGeometry, fireGlowMaterial);
+    fireGlow.position.copy(fire.position);
+    fireGlow.rotation.copy(fire.rotation);
+    rocket.add(fireGlow);
+    
+    // Create reverse fire (blue flame at the front)
+    const reverseFireGeometry = new THREE.ConeGeometry(0.7, 2, 8);
+    const reverseFireMaterial = new THREE.MeshPhongMaterial({
+      color: 0x4466ff,
+      flatShading: true,
+      transparent: true,
+      opacity: 0.8,
+      emissive: 0x2244ff,
+      emissiveIntensity: 0.5
+    });
+    const reverseFire = new THREE.Mesh(reverseFireGeometry, reverseFireMaterial);
+    reverseFire.position.y = 2.5; // Position at front of rocket
+    reverseFire.position.z = 0;
+    reverseFire.rotation.x = 0; // Point the fire forward
+    reverseFire.visible = false; // Initially hidden
+    rocket.add(reverseFire);
+    
+    // Add reverse fire glow effect
+    const reverseFireGlowGeometry = new THREE.ConeGeometry(1.2, 2.5, 8);
+    const reverseFireGlowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x66aaff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending
+    });
+    const reverseFireGlow = new THREE.Mesh(reverseFireGlowGeometry, reverseFireGlowMaterial);
+    reverseFireGlow.position.copy(reverseFire.position);
+    reverseFireGlow.rotation.copy(reverseFire.rotation);
+    reverseFireGlow.visible = false; // Initially hidden
+    rocket.add(reverseFireGlow);
     
     // Create a container for the rocket that will handle the roll
     const rocketContainer = new THREE.Group();
@@ -297,8 +390,8 @@ const RocketScene = () => {
       textMesh.position.y = 2;
       sectionGroup.add(textMesh);
 
-      // Position the section in space
-      sectionGroup.position.set(0, -2, section.position);
+      // Position the section in space - now with X position
+      sectionGroup.position.set(section.xPosition || 0, -2, section.position);
       
       // Add hover animation and initial properties
       sectionGroup.userData = {
@@ -361,28 +454,123 @@ const RocketScene = () => {
         speedRef.current *= 0.98;
       }
 
-      // Handle roll
-      const rollSpeed = 0.1;
+      // Handle lateral movement with A and D - Fixed to be more intuitive
+      const maxLateralSpeed = 0.3;
       if (keysRef.current.a) {
-        rollRef.current = Math.min(rollRef.current + rollSpeed, Math.PI * 0.5);
+        lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01, -maxLateralSpeed);
       } else if (keysRef.current.d) {
-        rollRef.current = Math.max(rollRef.current - rollSpeed, -Math.PI * 0.5);
+        lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01, maxLateralSpeed);
+      } else {
+        lateralSpeedRef.current *= 0.95; // Gradually slow down
+      }
+
+      // Handle turning/banking - now makes the rocket actually turn
+      const turnSpeed = 0.1;
+      if (keysRef.current.a) {
+        // Turn left 
+        rollRef.current = Math.min(rollRef.current + turnSpeed, Math.PI * 0.3);
+      } else if (keysRef.current.d) {
+        // Turn right
+        rollRef.current = Math.max(rollRef.current - turnSpeed, -Math.PI * 0.3);
       } else {
         rollRef.current *= 0.95; // Return to neutral position
       }
 
       if (rocketRef.current) {
-        // Move camera and rocket
+        // Move camera and rocket in Z axis
         camera.position.z -= speedRef.current;
-        rocketRef.current.position.z = camera.position.z - 20;
         
-        // Apply roll rotation to the container (which doesn't affect the rocket's pitch)
-        rocketRef.current.rotation.z = rollRef.current;
+        // Move camera and rocket in X axis
+        camera.position.x += lateralSpeedRef.current;
+        
+        // Position rocket relative to camera
+        rocketRef.current.position.z = camera.position.z - 20;
+        rocketRef.current.position.x = camera.position.x;
+        
+        // Apply roll and slight turning to the rocket container
+        rocketRef.current.rotation.z = -rollRef.current;
+        // Add yaw (turn) based on lateral movement - now inverted to face opposite direction
+        rocketRef.current.rotation.y = -lateralSpeedRef.current * 0.5;
         
         // Apply pitch based on speed to the rocket itself
         const targetRotation = -speedRef.current * 0.2;
         const rocket = rocketRef.current.children[0] as THREE.Group;
         rocket.rotation.x = -Math.PI / 2 + targetRotation;
+        
+        // Update fire effect with boost
+        const fire = rocket.children[2] as THREE.Mesh;
+        const fireGlow = rocket.children[3] as THREE.Mesh;
+        const reverseFire = rocket.children[4] as THREE.Mesh; 
+        const reverseFireGlow = rocket.children[5] as THREE.Mesh;
+        
+        // Forward fire effect
+        if (fire && speedRef.current > 0) {
+          fire.visible = true;
+          fireGlow.visible = true;
+          const boostScale = keysRef.current.space ? 2.5 : 1;
+          fire.scale.y = (1 + speedRef.current * 2) * boostScale;
+          fire.scale.x = keysRef.current.space ? 1.5 : 1;
+          fire.scale.z = keysRef.current.space ? 1.5 : 1;
+          
+          // Fix fire position to prevent glitching
+          fire.position.y = -2 - (fire.scale.y * 0.5);
+          
+          // Keep fire at the back of the rocket
+          const fireMaterial = fire.material as THREE.MeshPhongMaterial;
+          fireMaterial.opacity = Math.min(0.8, speedRef.current * 2);
+          fireMaterial.emissiveIntensity = keysRef.current.space ? 2 : 0.5;
+          fireMaterial.color.setHex(keysRef.current.space ? 0xff2200 : 0xff4400);
+          
+          // Update glow effect
+          fireGlow.scale.copy(fire.scale);
+          fireGlow.scale.multiplyScalar(1.3); // Make glow slightly larger
+          fireGlow.position.copy(fire.position);
+          
+          const glowMaterial = fireGlow.material as THREE.MeshBasicMaterial;
+          glowMaterial.opacity = fireMaterial.opacity * 0.5;
+          glowMaterial.color.setHex(keysRef.current.space ? 0xff6600 : 0xff7700);
+          
+          // Hide reverse fire
+          reverseFire.visible = false;
+          reverseFireGlow.visible = false;
+        } 
+        // Reverse fire effect (blue flame)
+        else if (reverseFire && speedRef.current < 0) {
+          reverseFire.visible = true;
+          reverseFireGlow.visible = true;
+          fire.visible = false;
+          fireGlow.visible = false;
+          
+          const reverseBoostScale = keysRef.current.space ? 3 : 1.5; // Larger scale for space
+          reverseFire.scale.y = (1 + Math.abs(speedRef.current) * 2) * reverseBoostScale;
+          reverseFire.scale.x = keysRef.current.space ? 1.8 : 1.2;
+          reverseFire.scale.z = keysRef.current.space ? 1.8 : 1.2;
+          
+          // Fix fire position to prevent glitching
+          reverseFire.position.y = 2.5 + (reverseFire.scale.y * 0.4);
+          
+          // Update fire material
+          const reverseFireMaterial = reverseFire.material as THREE.MeshPhongMaterial;
+          reverseFireMaterial.opacity = Math.min(0.8, Math.abs(speedRef.current) * 2);
+          reverseFireMaterial.emissiveIntensity = keysRef.current.space ? 2.5 : 0.8;
+          reverseFireMaterial.color.setHex(keysRef.current.space ? 0x00aaff : 0x4466ff);
+          
+          // Update glow effect
+          reverseFireGlow.scale.copy(reverseFire.scale);
+          reverseFireGlow.scale.multiplyScalar(1.4); // Make glow slightly larger
+          reverseFireGlow.position.copy(reverseFire.position);
+          
+          const reverseGlowMaterial = reverseFireGlow.material as THREE.MeshBasicMaterial;
+          reverseGlowMaterial.opacity = reverseFireMaterial.opacity * 0.5;
+          reverseGlowMaterial.color.setHex(keysRef.current.space ? 0x88ccff : 0x66aaff);
+        } 
+        else {
+          // Hide both fires when not moving
+          fire.visible = false;
+          fireGlow.visible = false;
+          reverseFire.visible = false;
+          reverseFireGlow.visible = false;
+        }
         
         // Update stars positions
         const starsPositions = stars.geometry.getAttribute('position');
@@ -413,23 +601,6 @@ const RocketScene = () => {
         
         // Keep camera looking at rocket
         camera.lookAt(rocketRef.current.position);
-
-        // Update fire effect with boost
-        const fire = rocket.children[2] as THREE.Mesh;
-        if (fire && speedRef.current > 0) {
-          fire.visible = true;
-          const boostScale = keysRef.current.space ? 2.5 : 1;
-          fire.scale.y = (1 + speedRef.current * 2) * boostScale;
-          fire.scale.x = keysRef.current.space ? 1.5 : 1;
-          fire.scale.z = keysRef.current.space ? 1.5 : 1;
-          // Keep fire at the back of the rocket
-          const fireMaterial = fire.material as THREE.MeshPhongMaterial;
-          fireMaterial.opacity = Math.min(0.8, speedRef.current * 2);
-          fireMaterial.emissiveIntensity = keysRef.current.space ? 2 : 0.5;
-          fireMaterial.color.setHex(keysRef.current.space ? 0xff2200 : 0xff4400);
-        } else {
-          fire.visible = false;
-        }
 
         // Animate portfolio sections
         let closestSection: PortfolioSection | null = null;
@@ -539,8 +710,17 @@ const RocketScene = () => {
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
       
-      {/* Debug info and manual trigger */}
+      {/* Debug info, manual trigger, and reset button */}
       <div className="absolute top-0 left-0 p-2 bg-black bg-opacity-50 text-white text-xs">
+        <div className="flex justify-between items-center mb-2">
+          <span className="font-bold">Debug Info</span>
+          <button 
+            onClick={resetRocket}
+            className="px-2 py-1 bg-blue-500 hover:bg-blue-600 rounded text-white ml-2"
+          >
+            Reset Position
+          </button>
+        </div>
         <div>On platform: {onPlatform ? 'YES' : 'NO'}</div>
         <div>Speed: {speedRef.current.toFixed(2)}</div>
         <div>F key pressed: {keysRef.current.f ? 'YES' : 'NO'}</div>
@@ -553,9 +733,9 @@ const RocketScene = () => {
         </button>
       </div>
       
-      {/* Tablet popup - make it more visible */}
+      {/* Tablet popup - now fully opaque */}
       {showTablet && activeSection && (
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4/5 max-w-2xl bg-slate-800 border-4 border-slate-600 rounded-lg p-6 text-white shadow-2xl z-50 animate-pulse">
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4/5 max-w-2xl bg-slate-800 border-4 border-slate-600 rounded-lg p-6 text-white shadow-2xl z-50">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-2xl font-bold" style={{ color: `#${activeSection.color.toString(16).padStart(6, '0')}` }}>
               {activeSection.title}
@@ -593,15 +773,15 @@ const RocketScene = () => {
         </div>
       )}
       
-      {/* Platform indicator - make it more noticeable */}
+      {/* Platform indicator - now fully opaque */}
       {onPlatform && !showTablet && (
-        <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-black bg-opacity-90 text-white px-6 py-3 rounded-full text-lg font-bold animate-bounce">
+        <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full text-lg font-bold animate-bounce">
           Press F to interact
         </div>
       )}
       
       {activeSection && !showTablet && (
-        <div className="absolute bottom-0 left-0 right-0 p-4 text-center text-white bg-black bg-opacity-50">
+        <div className="absolute bottom-0 left-0 right-0 p-4 text-center text-white bg-black">
           <h2 className="text-xl font-bold">{activeSection.title}</h2>
           <p>{activeSection.description}</p>
         </div>
