@@ -105,8 +105,6 @@ const RocketScene = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rocketRef = useRef<THREE.Group | undefined>(undefined);
   const speedRef = useRef(0);
-  const lateralSpeedRef = useRef(0); // For A/D movement
-  const rollRef = useRef(0);
   const keysRef = useRef({ w: false, s: false, a: false, d: false, space: false, f: false });
   const sectionsRef = useRef<THREE.Group[]>([]);
   const [activeSection, setActiveSection] = useState<PortfolioSection | null>(null);
@@ -117,7 +115,6 @@ const RocketScene = () => {
   const [onPlatform, setOnPlatform] = useState(false);
   const fJustPressedRef = useRef(false);
   const initialCameraPosition = useRef<{x: number, y: number, z: number} | null>(null);
-  const [rocketPosition, setRocketPosition] = useState({ x: 0, y: 0, z: 0 });
   const [visitedSections, setVisitedSections] = useState<Set<string>>(new Set());
   const [showFireworks, setShowFireworks] = useState(false);
   const fireworksTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -130,9 +127,12 @@ const RocketScene = () => {
     accentColor: 0x777777,
     windowColor: 0x44aaff
   });
-  const [asteroidCollision, setAsteroidCollision] = useState(false);
-  const asteroidsRef = useRef<THREE.Group[]>([]);
-  const collisionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Mouse look controls for first-person mode
+  const [mouseLookEnabled, setMouseLookEnabled] = useState(false);
+  const mouseSensitivityRef = useRef(0.002);
+  const mouseRotationRef = useRef({ x: 0, y: 0 });
+  const isPointerLockedRef = useRef(false);
 
   // Function to handle camera mode toggle
   const toggleCameraMode = () => {
@@ -174,6 +174,16 @@ const RocketScene = () => {
             // Set camera rotation to look forward
             camera.rotation.set(0, 0, 0); // Change from Math.PI to 0 to look forward
             camera.rotation.order = 'YXZ'; // Set rotation order to avoid gimbal lock
+            
+            // Automatically enable mouse look in first-person
+            setMouseLookEnabled(true);
+            
+            // Request pointer lock with a slight delay to ensure UI updates first
+            setTimeout(() => {
+              if (containerRef.current && !isPointerLockedRef.current) {
+                containerRef.current.requestPointerLock();
+              }
+            }, 50);
           } else {
             // Switch to third-person view
             console.log("Switching to third-person view");
@@ -194,6 +204,9 @@ const RocketScene = () => {
             
             // Look at rocket
             camera.lookAt(rocketRef.current.position);
+            
+            // Keep mouse look enabled for third-person turning
+            setMouseLookEnabled(true);
           }
         }
       }
@@ -202,138 +215,29 @@ const RocketScene = () => {
     });
   };
 
-  // Function to reset rocket position and regenerate platform positions
+  // Function to reset the rocket position
   const resetRocket = () => {
-    if (rocketRef.current && initialCameraPosition.current) {
-      // Reset movement values
-      speedRef.current = 0;
-      lateralSpeedRef.current = 0;
-      rollRef.current = 0;
+    if (rocketRef.current) {
+      // Reset position
+      rocketRef.current.position.set(0, 0, 0);
       
-      // Reset camera position to initial starting point
+      // Reset speed and rotation
+      speedRef.current = 0;
+      
+      // Reset camera position
       const camera = rocketRef.current.parent?.children.find(
         child => child instanceof THREE.PerspectiveCamera
       ) as THREE.PerspectiveCamera;
       
       if (camera) {
-        // Position the camera based on current camera mode
         if (cameraMode === 'third-person') {
-          // Third-person camera reset
-          camera.position.set(
-            0, // Set camera X to 0 so rocket will be at X=0 
-            8, // Keep Y the same
-            20 // Set camera Z to 20 so rocket will be at Z=0
-          );
-          
-          // The animation loop will position the rocket at (0, 0, 0) relative to the camera
-          // but let's set it explicitly now to ensure immediate update
-          rocketRef.current.position.set(0, 0, 0);
-          
-          // Make camera look at the rocket
+          camera.position.set(0, 8, 20);
           camera.lookAt(rocketRef.current.position);
         } else {
-          // First-person camera reset
-          // Position rocket at origin first
-          rocketRef.current.position.set(0, 0, 0);
-          
-          // Position camera inside the rocket cockpit
           camera.position.copy(rocketRef.current.position);
           camera.position.y += 1.5; // Cockpit height
-          
-          // Look forward
-          camera.rotation.set(0, 0, 0); // Set to look forward initially
-          
-          // Reset camera roll
-          camera.rotation.z = 0;
+          camera.rotation.set(0, 0, 0);
         }
-        
-        rocketRef.current.rotation.set(0, 0, 0);
-        
-        // Reset the rocket's rotation
-        const rocket = rocketRef.current.children[0] as THREE.Group;
-        if (rocket) {
-          rocket.rotation.x = -Math.PI / 2; // Original forward-facing orientation
-          rocket.rotation.y = 0;
-          rocket.rotation.z = 0;
-          
-          // Ensure rocket is visible with proper opacity in third-person mode
-          if (cameraMode === 'third-person') {
-            rocket.visible = true;
-            
-            // Restore upper section opacity
-            const upperSection = rocket.children[0] as THREE.Mesh;
-            if (upperSection && upperSection.material) {
-              (upperSection.material as THREE.MeshPhongMaterial).opacity = 1.0;
-              (upperSection.material as THREE.MeshPhongMaterial).transparent = false;
-            }
-          }
-        }
-        
-        // Update position state immediately to reflect the reset
-        setRocketPosition({
-          x: 0,
-          y: 0,
-          z: 0
-        });
-      }
-      
-      // Regenerate random positions for platforms
-      portfolioSections.forEach((section, index) => {
-        // Generate new random X position between -80 and 80
-        section.xPosition = (Math.random() - 0.5) * 160;
-        
-        // Update platform positions in the scene
-        if (sectionsRef.current[index]) {
-          sectionsRef.current[index].position.x = section.xPosition;
-          
-          // Reset Y position animation
-          sectionsRef.current[index].userData.hoverOffset = 0;
-          sectionsRef.current[index].position.y = sectionsRef.current[index].userData.originalY;
-          
-          // Reset text position
-          const text = sectionsRef.current[index].children[1] as THREE.Mesh;
-          text.position.y = sectionsRef.current[index].userData.originalTextY;
-        }
-      });
-      
-      // Reset state
-      setActiveSection(null);
-      setOnPlatform(false);
-      setShowTablet(false);
-      
-      // Reset visited sections
-      setVisitedSections(new Set());
-      setShowFireworks(false);
-      
-      // Clear any pending fireworks timeout
-      if (fireworksTimeoutRef.current) {
-        clearTimeout(fireworksTimeoutRef.current);
-        fireworksTimeoutRef.current = null;
-      }
-      
-      // Reset asteroids when resetting the rocket
-      if (asteroidsRef.current.length > 0) {
-        asteroidsRef.current.forEach(asteroid => {
-          // Generate new random positions
-          asteroid.position.set(
-            (Math.random() - 0.5) * 300,
-            (Math.random() - 0.5) * 200,
-            camera.position.z - (Math.random() * 400 + 100)
-          );
-          // Reset rotation
-          asteroid.rotation.set(
-            Math.random() * Math.PI * 2,
-            Math.random() * Math.PI * 2,
-            Math.random() * Math.PI * 2
-          );
-        });
-      }
-      
-      // Reset collision state
-      setAsteroidCollision(false);
-      if (collisionTimeoutRef.current) {
-        clearTimeout(collisionTimeoutRef.current);
-        collisionTimeoutRef.current = null;
       }
     }
   };
@@ -589,64 +493,6 @@ const RocketScene = () => {
     const sunLight = new THREE.DirectionalLight(0xffffff, 1);
     sunLight.position.copy(sunGroup.position);
     scene.add(sunLight);
-
-    // Create asteroids field
-    const asteroidGroup = new THREE.Group();
-    scene.add(asteroidGroup);
-    
-    // Create 50 asteroids
-    for (let i = 0; i < 50; i++) {
-      // Create a random asteroid shape using icosahedron with random vertices
-      const asteroidGeometry = new THREE.IcosahedronGeometry(
-        Math.random() * 3 + 1, // Random size between 1-4
-        0 // Detail level
-      );
-      
-      // Modify vertices to make it look more like an asteroid
-      const vertices = asteroidGeometry.attributes.position;
-      for (let j = 0; j < vertices.count; j++) {
-        const x = vertices.getX(j);
-        const y = vertices.getY(j);
-        const z = vertices.getZ(j);
-        
-        // Add random displacement to each vertex
-        vertices.setX(j, x + (Math.random() - 0.5) * 0.5);
-        vertices.setY(j, y + (Math.random() - 0.5) * 0.5);
-        vertices.setZ(j, z + (Math.random() - 0.5) * 0.5);
-      }
-      
-      // Create a material with random colors in the gray-brown range
-      const hue = Math.random() * 0.1 + 0.05; // 0.05-0.15 range (brownish)
-      const saturation = Math.random() * 0.3 + 0.1; // 0.1-0.4 range
-      const lightness = Math.random() * 0.2 + 0.2; // 0.2-0.4 range (darker)
-      
-      const asteroidMaterial = new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(hue, saturation, lightness),
-        flatShading: true,
-        roughness: 0.8,
-        metalness: 0.2
-      });
-      
-      const asteroid = new THREE.Mesh(asteroidGeometry, asteroidMaterial);
-      
-      // Position asteroids randomly in space with more in front of the rocket
-      asteroid.position.set(
-        (Math.random() - 0.5) * 300, // X: Spread horizontally
-        (Math.random() - 0.5) * 200, // Y: Spread vertically
-        camera.position.z - (Math.random() * 400 + 100) // Z: Positioned ahead of the rocket
-      );
-      
-      // Random rotation
-      asteroid.rotation.set(
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2
-      );
-      
-      // Add to scene and store reference
-      asteroidGroup.add(asteroid);
-      asteroidsRef.current.push(asteroid as unknown as THREE.Group);
-    }
     
     // Also add a planetary ring system
     const ringGroup = new THREE.Group();
@@ -678,12 +524,10 @@ const RocketScene = () => {
     ringGroup.add(ring);
     scene.add(ringGroup);
 
-    // Update keyboard handler
+    // Update keyboard handler - we'll only use W/S keys now
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'w') keysRef.current.w = true;
       if (event.key === 's') keysRef.current.s = true;
-      if (event.key === 'a') keysRef.current.a = true;
-      if (event.key === 'd') keysRef.current.d = true;
       if (event.key === ' ') {
         event.preventDefault(); // Prevent space from triggering click
         keysRef.current.space = true;
@@ -707,14 +551,65 @@ const RocketScene = () => {
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.key === 'w') keysRef.current.w = false;
       if (event.key === 's') keysRef.current.s = false;
-      if (event.key === 'a') keysRef.current.a = false;
-      if (event.key === 'd') keysRef.current.d = false;
       if (event.key === ' ') keysRef.current.space = false;
       if (event.key === 'f' || event.key === 'F') keysRef.current.f = false;
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+
+    // Mouse move handler for camera control (both first and third person)
+    const handleMouseMove = (event: MouseEvent) => {
+      if (mouseLookEnabled && isPointerLockedRef.current) {
+        // Update rotation reference based on mouse movement
+        // Horizontal movement affects Y rotation (yaw)
+        // Negative movementX means looking right, positive means looking left
+        mouseRotationRef.current.y -= event.movementX * mouseSensitivityRef.current;
+        
+        // Vertical movement affects X rotation (pitch)
+        // Negative movementY means looking up, positive means looking down
+        mouseRotationRef.current.x -= event.movementY * mouseSensitivityRef.current;
+        
+        // Clamp the vertical rotation to prevent over-rotation
+        mouseRotationRef.current.x = Math.max(
+          -Math.PI / 2, // Looking straight up
+          Math.min(Math.PI / 2, mouseRotationRef.current.x) // Looking straight down
+        );
+        
+        // Log rotation values for debugging
+        console.log(`Rotation - X: ${mouseRotationRef.current.x.toFixed(2)}, Y: ${mouseRotationRef.current.y.toFixed(2)}`);
+      }
+    };
+    
+    // Pointer lock change handler
+    const handlePointerLockChange = () => {
+      const wasPointerLocked = isPointerLockedRef.current;
+      isPointerLockedRef.current = document.pointerLockElement === containerRef.current;
+      
+      // If pointer lock was exited but mouse look is still enabled
+      if (!isPointerLockedRef.current && wasPointerLocked && mouseLookEnabled) {
+        console.log("Pointer lock lost unexpectedly");
+        
+        // Check if this was due to clicking a UI element (don't automatically relock)
+        // We'll relock when user clicks back on the container
+      }
+    };
+    
+    // Handle mouse click on container to re-enable pointer lock if needed
+    const handleContainerClick = () => {
+      if (mouseLookEnabled && !isPointerLockedRef.current) {
+        console.log("Requesting pointer lock after container click");
+        if (containerRef.current) {
+          containerRef.current.requestPointerLock();
+        }
+      }
+    };
+
+    // Add event listeners for mouse control
+    window.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
+    // Add click handler for container to re-enable pointer lock
+    containerRef.current?.addEventListener('click', handleContainerClick);
 
     // Create portfolio sections
     portfolioSections.forEach((section) => {
@@ -805,54 +700,30 @@ const RocketScene = () => {
         speedRef.current *= 0.98;
       }
 
-      // Handle lateral movement with A and D - Fixed to be more intuitive
-      const maxLateralSpeed = 0.3;
-      const boostLateralSpeed = 0.6; // New higher lateral speed when boosting
-      const currentMaxLateralSpeed = keysRef.current.space ? boostLateralSpeed : maxLateralSpeed; // Dynamic max speed
-      const isMovingBackward = speedRef.current < 0;
-      
-      if (keysRef.current.a) {
-        // When moving backward in first-person mode, invert lateral controls
-        // to maintain directional consistency from the camera's perspective
-        if (isMovingBackward && cameraMode === 'first-person') {
-          lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01 * (keysRef.current.space ? 2 : 1), currentMaxLateralSpeed); // Faster when boosting
-        } else {
-          lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01 * (keysRef.current.space ? 2 : 1), -currentMaxLateralSpeed); // Faster when boosting
-        }
-      } else if (keysRef.current.d) {
-        // When moving backward in first-person mode, invert lateral controls
-        if (isMovingBackward && cameraMode === 'first-person') {
-          lateralSpeedRef.current = Math.max(lateralSpeedRef.current - 0.01 * (keysRef.current.space ? 2 : 1), -currentMaxLateralSpeed); // Faster when boosting
-        } else {
-          lateralSpeedRef.current = Math.min(lateralSpeedRef.current + 0.01 * (keysRef.current.space ? 2 : 1), currentMaxLateralSpeed); // Faster when boosting
-        }
-      } else {
-        lateralSpeedRef.current *= 0.95; // Gradually slow down
-      }
-
-      // Handle turning/banking - now makes the rocket actually turn
-      const turnSpeed = 0.1;
-      if (keysRef.current.a) {
-        // Turn left 
-        rollRef.current = Math.min(rollRef.current + turnSpeed, Math.PI * 0.3);
-      } else if (keysRef.current.d) {
-        // Turn right
-        rollRef.current = Math.max(rollRef.current - turnSpeed, -Math.PI * 0.3);
-      } else {
-        rollRef.current *= 0.95; // Return to neutral position
-      }
-
       if (rocketRef.current) {
         // Different movement logic based on camera mode
         if (cameraMode === 'third-person') {
           // THIRD PERSON MODE
-          // Move camera based on input
-        camera.position.z -= speedRef.current;
-          camera.position.x += lateralSpeedRef.current;
+          // In third-person mode, we'll still use mouse movement for turning
+          // Calculate turning direction based on mouse position
+          const turnDirection = mouseRotationRef.current.y;
           
-          // Position rocket relative to camera
-        rocketRef.current.position.z = camera.position.z - 20;
-          rocketRef.current.position.x = camera.position.x;
+          // Get pitch factor for vertical movement (from mouse look)
+          const pitchFactor = mouseRotationRef.current.x;
+          
+          // Move camera based on input, turn direction, and pitch
+          camera.position.z -= speedRef.current * Math.cos(turnDirection);
+          camera.position.x -= speedRef.current * Math.sin(turnDirection);
+          // Add vertical movement based on pitch - looking up moves up, looking down moves down
+          camera.position.y += speedRef.current * Math.sin(pitchFactor) * 0.8;
+          
+          // Position rocket relative to camera but facing in the direction of movement
+          rocketRef.current.position.z = camera.position.z - 20 * Math.cos(turnDirection);
+          rocketRef.current.position.x = camera.position.x - 20 * Math.sin(turnDirection);
+          rocketRef.current.position.y = camera.position.y - 8; // Adjust vertical position to maintain distance
+          
+          // Always make the rocket face the same direction you're looking
+          rocketRef.current.rotation.y = turnDirection;
           
           // Make rocket fully visible and restore opacity
           const rocket = rocketRef.current.children[0] as THREE.Group;
@@ -865,18 +736,58 @@ const RocketScene = () => {
               (upperSection.material as THREE.MeshPhongMaterial).opacity = 1.0;
               (upperSection.material as THREE.MeshPhongMaterial).transparent = false;
             }
+            
+            // Apply pitch based on both speed and mouse look
+            const speedPitch = -speedRef.current * 0.2; // Original speed-based pitch
+            const lookPitch = mouseRotationRef.current.x * 0.5; // Scale down the look pitch for better visuals
+            rocket.rotation.x = -Math.PI / 2 + speedPitch + lookPitch;
           }
           
           // Set camera to look at the rocket
           camera.lookAt(rocketRef.current.position);
         } else {
           // FIRST PERSON MODE
-          // Move the rocket directly based on input
-          rocketRef.current.position.z -= speedRef.current;
-          rocketRef.current.position.x += lateralSpeedRef.current;
+          
+          // Always ensure mouse look is enabled in first-person mode
+          if (!mouseLookEnabled) {
+            setMouseLookEnabled(true);
+          }
+          
+          // Occasional check to request pointer lock if not locked
+          // Only request lock occasionally to prevent excessive requests
+          if (mouseLookEnabled && !isPointerLockedRef.current && Math.random() < 0.01) {
+            console.log("Requesting pointer lock from animation loop");
+            if (containerRef.current) {
+              containerRef.current.requestPointerLock();
+            }
+          }
+          
+          // Create direction vector for 3D movement (including vertical)
+          const direction = new THREE.Vector3();
+          
+          // Get the forward direction (-Z axis)
+          direction.set(0, 0, -1);
+          
+          // Apply full rotation (pitch and yaw) to get 3D direction
+          const euler = new THREE.Euler(mouseRotationRef.current.x, mouseRotationRef.current.y, 0, 'YXZ');
+          direction.applyEuler(euler);
+          
+          // Move in the direction we're facing (including vertical)
+          const moveSpeed = speedRef.current;
+          
+          // Apply movement in the 3D direction we're looking
+          rocketRef.current.position.x += direction.x * moveSpeed;
+          rocketRef.current.position.z += direction.z * moveSpeed;
+          rocketRef.current.position.y += direction.y * moveSpeed;
+          
+          // Always rotate rocket to match camera direction in first-person mode
+          rocketRef.current.rotation.y = mouseRotationRef.current.y;
           
           const rocket = rocketRef.current.children[0] as THREE.Group;
           if (rocket) {
+            // Apply pitch to the rocket based on the camera's pitch
+            rocket.rotation.x = -Math.PI / 2 + mouseRotationRef.current.x;
+            
             // Make cockpit transparent
             const upperSection = rocket.children[0] as THREE.Mesh;
             if (upperSection && upperSection.material) {
@@ -888,54 +799,22 @@ const RocketScene = () => {
             camera.position.copy(rocketRef.current.position);
             camera.position.y += 1.5; // Cockpit height
             
-            // Use a clean rotation approach
-            // First, determine the base rotation based on direction of movement
-            const isMovingBackward = speedRef.current < 0;
-            const movingLaterally = Math.abs(lateralSpeedRef.current) > 0.01;
-            
-            // Calculate the base rotation angle
-            // Math.PI = looking backward, 0 = looking forward
-            const baseYaw = isMovingBackward ? Math.PI : 0;
-            
-            // Set the camera's base orientation
-            camera.rotation.set(0, baseYaw, 0);
-            
-            // Don't apply roll during lateral movement in first person mode
-            // camera.rotation.z = -rollRef.current * 0.7; (removed)
-            
-            // Calculate combined movement direction
-            if (movingLaterally) {
-              // The turning angle based on lateral speed
-              const lateralAngle = lateralSpeedRef.current * 0.2; // Increased effect for more noticeable turning
-              
-              // When moving backward, inverting the lateral direction makes the controls feel more natural
-              const directionMultiplier = isMovingBackward ? -1 : 1;
-              
-              // Apply the combined angle to the camera's yaw
-              camera.rotation.y += lateralAngle * directionMultiplier;
-            }
+            // Apply mouse rotation directly to camera rotation
+            camera.rotation.order = 'YXZ'; // Set rotation order to avoid gimbal lock
+            camera.rotation.x = mouseRotationRef.current.x;
+            camera.rotation.y = mouseRotationRef.current.y;
+            camera.rotation.z = 0;
           }
         }
         
         // Apply roll and slight turning to the rocket container (in both modes)
-        rocketRef.current.rotation.z = -rollRef.current;
+        rocketRef.current.rotation.z = 0;
         
-        // Add yaw (turn) based on lateral movement
-        if (speedRef.current < 0) {
-          // When reversing: face right for D, left for A (same as movement direction)
-          rocketRef.current.rotation.y = lateralSpeedRef.current * 0.5;
-        } else {
-          // When moving forward: face left for D, right for A (opposite to movement)
-          rocketRef.current.rotation.y = -lateralSpeedRef.current * 0.5;
-        }
-        
-        // Apply pitch based on speed to the rocket itself
-        const targetRotation = -speedRef.current * 0.2;
+        // Get the rocket model for fire effects and other shared behaviors
         const rocket = rocketRef.current.children[0] as THREE.Group;
+        
+        // Update fire effect with boost - Get the effects group
         if (rocket) {
-        rocket.rotation.x = -Math.PI / 2 + targetRotation;
-          
-          // Update fire effect with boost - Get the effects group
           const rocketEffects = rocket.children.find(child => child instanceof THREE.Group) as THREE.Group;
           
           if (rocketEffects && rocketEffects.children.length >= 4) {
@@ -1006,8 +885,8 @@ const RocketScene = () => {
               reverseGlowMaterial.opacity = reverseFireMaterial.opacity * 0.5;
               reverseGlowMaterial.color.setHex(keysRef.current.space ? 0x88ccff : 0x66aaff);
             } 
+            // No movement
             else {
-              // Hide both fires when not moving
               fire.visible = false;
               fireGlow.visible = false;
               reverseFire.visible = false;
@@ -1097,48 +976,7 @@ const RocketScene = () => {
         // Update active section
         setActiveSection(closestSection);
 
-        // Animate and check collisions with asteroids
-        let hasCollision = false;
-        asteroidsRef.current.forEach(asteroid => {
-          // Rotate slowly for a dynamic feel
-          asteroid.rotation.x += 0.001;
-          asteroid.rotation.y += 0.001;
-          
-          // Check if asteroid is too far behind the camera, if so, reposition it ahead
-          if (asteroid.position.z > camera.position.z + 100) {
-            asteroid.position.z = camera.position.z - (Math.random() * 400 + 100);
-            asteroid.position.x = (Math.random() - 0.5) * 300;
-            asteroid.position.y = (Math.random() - 0.5) * 200;
-          }
-          
-          // Check for collision with rocket
-          if (!asteroidCollision && rocketRef.current) { // Only check if not already in collision state
-            const distance = asteroid.position.distanceTo(rocketRef.current.position);
-            if (distance < 5) { // Collision radius
-              hasCollision = true;
-            }
-          }
-        });
-        
-        // Handle collision if detected
-        if (hasCollision && !asteroidCollision) {
-          setAsteroidCollision(true);
-          // Reset collision state after 1.5 seconds
-          collisionTimeoutRef.current = setTimeout(() => {
-            setAsteroidCollision(false);
-          }, 1500);
-          
-          // Add collision sound or effect here if desired
-          // Slow down the rocket as collision penalty
-          speedRef.current = speedRef.current * 0.3;
-        }
-
-        // Update rocket position state for display
-        setRocketPosition({
-          x: rocketRef.current.position.x,
-          y: rocketRef.current.position.y,
-          z: rocketRef.current.position.z
-        });
+        // We've removed asteroid animation and collision checking
       }
 
       renderer.render(scene, camera);
@@ -1161,12 +999,19 @@ const RocketScene = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
+      containerRef.current?.removeEventListener('click', handleContainerClick);
+      
+      if (document.pointerLockElement === containerRef.current) {
+        document.exitPointerLock();
+      }
       
       if (containerRef.current?.contains(renderer.domElement)) {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, [mounted, rocketCustomization]);
+  }, [mounted, rocketCustomization, mouseLookEnabled, mouseSensitivityRef.current]);
 
   // Direct F key handling outside the ThreeJS context
   useEffect(() => {
@@ -1318,11 +1163,32 @@ const RocketScene = () => {
         }
       }
     }
+    
+    // FIX: Re-enable pointer lock if we're in first-person mode and mouse look is enabled
+    // This ensures clicking on customization colors doesn't break the mouse look
+    if (cameraMode === 'first-person' && mouseLookEnabled) {
+      // Small timeout to let the click event fully resolve
+      setTimeout(() => {
+        if (containerRef.current && !isPointerLockedRef.current) {
+          containerRef.current.requestPointerLock();
+        }
+      }, 50);
+    }
   };
 
   // Toggle customization panel
   const toggleCustomizationPanel = () => {
-    setShowCustomizationPanel(prev => !prev);
+    const newState = !showCustomizationPanel;
+    setShowCustomizationPanel(newState);
+    
+    // FIX: When closing the panel, re-enable pointer lock if needed
+    if (!newState && cameraMode === 'first-person' && mouseLookEnabled) {
+      setTimeout(() => {
+        if (containerRef.current && !isPointerLockedRef.current) {
+          containerRef.current.requestPointerLock();
+        }
+      }, 50);
+    }
   };
 
   if (!mounted) {
@@ -1330,45 +1196,69 @@ const RocketScene = () => {
   }
 
   return (
-    <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full" />
+    <div className="relative w-full h-full overflow-hidden" ref={containerRef}>
+      <div className="absolute top-4 left-4 right-4 flex flex-wrap gap-4 z-10">
+        <button
+          className="bg-green-500 text-white py-2 px-4 rounded-lg flex items-center space-x-2 hover:bg-green-600 transition-colors"
+          onClick={toggleCameraMode}
+        >
+          {cameraMode === 'third-person' ? (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+              </svg>
+              <span>Switch to First Person</span>
+            </>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+              <span>Switch to Third Person</span>
+            </>
+          )}
+        </button>
+        
+        <button
+          className="bg-purple-500 text-white py-2 px-4 rounded-lg flex items-center space-x-2 hover:bg-purple-600 transition-colors"
+          onClick={toggleCustomizationPanel}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+          </svg>
+          <span>Customize Rocket</span>
+        </button>
+
+        {cameraMode === 'first-person' && (
+          <div className="bg-black bg-opacity-70 text-white py-2 px-4 rounded-lg flex items-center space-x-2">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M6.672 1.911a1 1 0 10-1.932.518l.259.966a1 1 0 001.932-.518l-.26-.966zM2.429 4.74a1 1 0 10-.517 1.932l.966.259a1 1 0 00.517-1.932l-.966-.26zm8.814-.569a1 1 0 00-1.415-1.414l-.707.707a1 1 0 101.415 1.415l.707-.708zm-7.071 7.072l.707-.707A1 1 0 003.465 9.12l-.708.707a1 1 0 001.415 1.415zm3.2-5.171a1 1 0 00-1.3 1.3l4 10a1 1 0 001.823.075l1.38-2.759 3.018 3.02a1 1 0 001.414-1.415l-3.019-3.02 2.76-1.379a1 1 0 00-.076-1.822l-10-4z" clipRule="evenodd" />
+            </svg>
+            <span>Move mouse to look around</span>
+          </div>
+        )}
+        
+        {/* Add mouse look status indicator */}
+        {mouseLookEnabled && (
+          <div className="bg-black bg-opacity-70 text-white py-2 px-4 rounded-lg flex items-center space-x-2">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+              <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+            </svg>
+            <span>Mouse Look Active</span>
+          </div>
+        )}
+      </div>
       
       {/* Fullscreen fireworks effect */}
       {showFireworks && <Fireworks />}
-      
-      {/* Collision overlay effect */}
-      {asteroidCollision && (
-        <div className="collision-flash"></div>
-      )}
-      
-      {/* Camera mode toggle button */}
-      <button 
-        onClick={toggleCameraMode}
-        className={`absolute top-4 left-4 px-3 py-2 ${cameraMode === 'first-person' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-md z-10 flex items-center shadow-lg`}
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-          <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
-        </svg>
-        {cameraMode === 'first-person' ? 'Switch to Third Person' : 'Switch to First Person'}
-      </button>
-      
-      {/* Rocket customization toggle button */}
-      <button 
-        onClick={toggleCustomizationPanel}
-        className="absolute top-16 left-4 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md z-10 flex items-center"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
-          <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
-        </svg>
-        Customize Rocket
-      </button>
       
       {/* Customization panel */}
       {showCustomizationPanel && (
         <div className="absolute top-28 left-4 p-4 bg-gray-900 border border-gray-700 text-white rounded-md z-20 w-64">
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-bold">Rocket Customization</h3>
-            <button 
+            <button
               onClick={toggleCustomizationPanel}
               className="text-gray-400 hover:text-white"
             >
@@ -1458,19 +1348,10 @@ const RocketScene = () => {
           </button>
         </div>
         
-        {/* Position coordinates */}
-        <div className="mb-2 p-1 bg-gray-800 rounded">
-          <div className="font-bold mb-1">Rocket Position:</div>
-          <div>X: {rocketPosition.x.toFixed(2)}</div>
-          <div>Y: {rocketPosition.z.toFixed(2)}</div>
-          <div>Z: {rocketPosition.y.toFixed(2)}</div>
-        </div>
-        
         <div>On platform: {onPlatform ? 'YES' : 'NO'}</div>
         <div>Speed: {speedRef.current.toFixed(2)}</div>
         <div>Camera mode: {cameraMode}</div>
         <div>Active section: {activeSection?.title || 'None'}</div>
-        <div>Asteroid collision: {asteroidCollision ? 'YES' : 'NO'}</div>
         <button 
           onClick={() => {
             if (onPlatform && activeSection) {
