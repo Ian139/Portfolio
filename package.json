@@ -6,7 +6,10 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "export": "next export",
+    "serve": "npx serve out",
+    "deploy": "next build && touch out/.nojekyll"
   },
   "dependencies": {
     "@react-three/drei": "^10.0.3",
